@@ -1,0 +1,544 @@
+use crate::command::FirehoseCommand;
+use crate::error::{FirehoseError, Result};
+use crate::response::FirehoseResponse;
+use bytes::{Bytes, BytesMut};
+use qedl_core::{Event, EventSink, FirehoseEvent, emit_event};
+use qedl_transport::Transport;
+use std::sync::Arc;
+use std::time::Duration;
+
+const READ_BUF_SIZE: usize = 64 * 1024;
+
+pub struct FirehoseClient {
+    pub memory_name: String,
+    pub sector_size: u32,
+    pub max_payload_size: u32,
+    pub total_sectors: u64,
+    pub target_name: String,
+    initialized: bool,
+    /// Buffer for leftover bytes from read_response that belong to raw data, not XML
+    leftover: BytesMut,
+    /// Reusable I/O buffer to avoid per-command allocation
+    read_buf: Vec<u8>,
+    event_sink: Option<Arc<dyn EventSink>>,
+}
+
+impl FirehoseClient {
+    pub fn new() -> Self {
+        Self {
+            memory_name: "eMMC".to_string(),
+            sector_size: 512,
+            max_payload_size: 1024 * 1024,
+            total_sectors: 0,
+            target_name: "unknown".to_string(),
+            initialized: false,
+            leftover: BytesMut::new(),
+            read_buf: vec![0u8; READ_BUF_SIZE],
+            event_sink: None,
+        }
+    }
+
+    pub fn with_event_sink(mut self, sink: Option<Arc<dyn EventSink>>) -> Self {
+        self.event_sink = sink;
+        self
+    }
+
+    fn emit(&self, event: FirehoseEvent) {
+        emit_event(&self.event_sink, Event::Firehose(event));
+    }
+
+    pub async fn configure(&mut self, transport: &mut dyn Transport) -> Result<()> {
+        self.emit(FirehoseEvent::ConfigureStarted);
+        let cmd = FirehoseCommand::Configure {
+            memory_name: self.memory_name.clone(),
+            target_name: self.target_name.clone(),
+            skip_storage_init: false,
+            zlp_aware_host: true,
+            max_payload_size: self.max_payload_size,
+        };
+
+        let resp = self.execute_command(transport, &cmd).await?;
+        if !resp.is_ack() {
+            return Err(FirehoseError::ConfigureFailed {
+                reason: resp.error_log.unwrap_or_else(|| "unknown error".to_string()),
+            });
+        }
+
+        if let Some(name) = &resp.memory_name {
+            self.memory_name = name.clone();
+        }
+        if let Some(ss) = resp.sector_size {
+            self.sector_size = ss;
+        }
+        if let Some(mps) = resp.max_payload_size {
+            self.max_payload_size = mps;
+        }
+        if let Some(ts) = resp.total_sectors {
+            self.total_sectors = ts;
+        }
+
+        self.initialized = true;
+        self.emit(FirehoseEvent::ConfigureComplete);
+        tracing::info!(
+            "Firehose Configured: Memory={}, SectorSize={}, MaxPayload={}, TotalSectors={}",
+            self.memory_name,
+            self.sector_size,
+            self.max_payload_size,
+            self.total_sectors
+        );
+        Ok(())
+    }
+
+    pub async fn execute_command(
+        &mut self,
+        transport: &mut dyn Transport,
+        command: &FirehoseCommand,
+    ) -> Result<FirehoseResponse> {
+        let inner = command.to_xml();
+        let xml = format!(r#"<?xml version="1.0" encoding="UTF-8" ?><data>{}</data>"#, inner);
+        tracing::trace!(xml = %xml, "Sending Firehose command");
+
+        let _ = transport.flush().await;
+        transport.write(xml.as_bytes()).await?;
+
+        let response_xml = self.read_response(transport).await?;
+        tracing::trace!(xml = %response_xml, "Received Firehose response");
+
+        let resp =
+            FirehoseResponse::from_xml(&response_xml).map_err(|e| FirehoseError::InvalidResponse { reason: e })?;
+
+        for log_msg in &resp.logs {
+            tracing::trace!(target: "qedl_firehose::device", "{}", log_msg);
+        }
+
+        tracing::trace!(
+            ack = resp.is_ack(),
+            error = ?resp.error_log,
+            "Parsed Firehose response"
+        );
+        Ok(resp)
+    }
+
+    /// Read XML response, preserving any extra bytes (raw data) in self.leftover.
+    /// This prevents raw data that arrives in the same serial read as XML from being lost.
+    /// It continues reading until a <response ... /> tag is found.
+    async fn read_response(&mut self, transport: &mut dyn Transport) -> Result<String> {
+        let buf = &mut self.read_buf;
+        let mut response = BytesMut::with_capacity(8192); // Pre-allocate response buffer
+
+        // Start with any leftover from previous read_response
+        if !self.leftover.is_empty() {
+            response.extend_from_slice(&self.leftover);
+            self.leftover.clear();
+        }
+
+        let mut empty_reads = 0u32;
+        let max_empty_reads = 10;
+
+        loop {
+            transport.set_timeout(Duration::from_millis(1000));
+
+            let n = match transport.read(buf).await {
+                Ok(0) => 0,
+                Ok(n) => n,
+                Err(_) => {
+                    tracing::trace!("Firehose read_response: transport timeout, retrying...");
+                    0
+                }
+            };
+            if n == 0 {
+                // If we already have some data, check if it's a complete response
+                // before giving up on empty read
+                if !response.is_empty() {
+                    let text = String::from_utf8_lossy(&response);
+                    if text.contains("<response ") && (text.contains("/>") || text.contains("</response>")) {
+                        tracing::trace!("Firehose response found in existing buffer after timeout");
+                        // We found it, proceed to extract and return
+                    } else {
+                        empty_reads += 1;
+                        if empty_reads > max_empty_reads {
+                            tracing::warn!(
+                                "Firehose read_response: {} consecutive empty reads, giving up. Current buffer: {}",
+                                empty_reads,
+                                text
+                            );
+                            return Err(FirehoseError::Timeout {
+                                command: "read_response".to_string(),
+                            });
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                } else {
+                    empty_reads += 1;
+                    if empty_reads > max_empty_reads {
+                        return Err(FirehoseError::Timeout {
+                            command: "read_response".to_string(),
+                        });
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+            }
+
+            empty_reads = 0;
+            if n > 0 {
+                response.extend_from_slice(&buf[..n]);
+            }
+
+            let text = String::from_utf8_lossy(&response);
+
+            // We are looking for the <response ... /> tag.
+            // Some devices wrap everything in <data>...</data>, some don't.
+            // The most reliable way is to find the <response tag and then its closure.
+            if let Some(resp_start) = text.find("<response ") {
+                // Find where this response ends. It could be "/>" or "</response>"
+                let mut resp_end = text[resp_start..].find("/>").map(|i| i + 2);
+                if resp_end.is_none() {
+                    resp_end = text[resp_start..].find("</response>").map(|i| i + "</response>".len());
+                }
+
+                if let Some(rel_end) = resp_end {
+                    let abs_end = resp_start + rel_end;
+
+                    // If there's a </data> after the response, include it too
+                    let mut final_end = abs_end;
+                    if let Some(data_end) = text[abs_end..].find("</data>") {
+                        final_end = abs_end + data_end + "</data>".len();
+                    }
+
+                    if final_end < response.len() {
+                        self.leftover = response.split_off(final_end);
+                    }
+
+                    let result = String::from_utf8_lossy(&response).to_string();
+                    tracing::trace!(
+                        "Firehose response complete ({} bytes, leftover: {})",
+                        response.len(),
+                        self.leftover.len()
+                    );
+                    return Ok(result);
+                }
+            }
+
+            if response.len() > 128 * 1024 {
+                tracing::warn!("Firehose response too large: {} bytes", response.len());
+                return Err(FirehoseError::InvalidResponse {
+                    reason: "response too large".to_string(),
+                });
+            }
+        }
+    }
+
+    pub async fn read_sectors(
+        &mut self,
+        transport: &mut dyn Transport,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<Bytes> {
+        let total_bytes = (num_sectors * self.sector_size as u64) as usize;
+        let start_time = std::time::Instant::now();
+        tracing::trace!(
+            "Firehose read: LUN={}, Sector={}, Count={}, Bytes={}",
+            physical_partition,
+            start_sector,
+            num_sectors,
+            total_bytes
+        );
+
+        self.emit(FirehoseEvent::ReadStarted {
+            lun: physical_partition,
+            start: start_sector,
+            count: num_sectors,
+        });
+
+        let cmd = FirehoseCommand::Read {
+            sector_size: self.sector_size,
+            num_sectors,
+            physical_partition,
+            start_sector,
+        };
+
+        let resp = self.execute_command(transport, &cmd).await?;
+        if !resp.is_ack() {
+            tracing::error!(
+                error = resp.error_log.as_deref().unwrap_or("unknown"),
+                "Firehose read NAK"
+            );
+            return Err(FirehoseError::Nak {
+                command: "read".to_string(),
+                reason: resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+            });
+        }
+
+        let mut data = vec![0u8; total_bytes];
+        let mut read = 0;
+
+        // Special case for MSM8937 and similar: data might be in the logs as hex strings
+        // if rawmode=true is "fake".
+        let mut data_from_logs = Vec::new();
+        for log in &resp.logs {
+            if log.contains("0x") {
+                let parts: Vec<&str> = log.split_whitespace().collect();
+                for part in parts {
+                    if let Some(hex_val) = part.strip_prefix("0x")
+                        && let Ok(val) = u8::from_str_radix(hex_val, 16)
+                    {
+                        data_from_logs.push(val);
+                    }
+                }
+            }
+        }
+
+        if !data_from_logs.is_empty() {
+            tracing::trace!(
+                count = data_from_logs.len(),
+                "Firehose read: extracted bytes from logs (pseudo-rawmode)"
+            );
+            let n = std::cmp::min(data_from_logs.len(), data.len());
+            data[..n].copy_from_slice(&data_from_logs[..n]);
+            read = n;
+        }
+
+        // Use any leftover data from read_response first (XML+RAW in same serial read)
+        if read < total_bytes && !self.leftover.is_empty() {
+            let n = std::cmp::min(self.leftover.len(), data.len() - read);
+            let consumed = self.leftover.split_to(n);
+            data[read..read + n].copy_from_slice(&consumed);
+            read += n;
+            tracing::trace!(count = n, "Firehose read: consumed bytes from leftover");
+        }
+
+        while read < total_bytes {
+            let n = transport.read(&mut data[read..]).await?;
+            if n == 0 {
+                tracing::warn!(read = read, total = total_bytes, "Firehose read data: EOF");
+                return Err(FirehoseError::Timeout {
+                    command: "read".to_string(),
+                });
+            }
+            read += n;
+
+            // Emit progress event
+            self.emit(FirehoseEvent::ReadProgress {
+                current: read as u64,
+                total: total_bytes as u64,
+            });
+        }
+
+        // After reading the raw data, we MUST read the final completion response (usually <response value="ACK" />)
+        // If we don't, it will stay in the transport buffer and corrupt the next command.
+        tracing::trace!("Firehose read: raw data complete, waiting for completion response...");
+        let final_resp_xml = self.read_response(transport).await?;
+        let final_resp =
+            FirehoseResponse::from_xml(&final_resp_xml).map_err(|e| FirehoseError::InvalidResponse { reason: e })?;
+
+        if !final_resp.is_ack() {
+            tracing::warn!(
+                error = ?final_resp.error_log,
+                "Firehose read: completion response was NAK"
+            );
+        } else {
+            tracing::trace!("Firehose read: completion response ACK received");
+        }
+
+        let elapsed = start_time.elapsed().as_secs_f64();
+        self.emit(FirehoseEvent::ReadComplete);
+        tracing::trace!(
+            "Firehose read complete: {} bytes in {:.3}s ({:.2} MiB/s)",
+            read,
+            elapsed,
+            (read as f64 / 1024.0 / 1024.0) / elapsed
+        );
+        if data.len() >= 8 && &data[0..8] == b"EFI PART" {
+            tracing::debug!("GPT signature found at start of data");
+        }
+
+        Ok(Bytes::from(data))
+    }
+
+    pub async fn program_sectors(
+        &mut self,
+        transport: &mut dyn Transport,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+        data: &[u8],
+    ) -> Result<()> {
+        let start_time = std::time::Instant::now();
+        tracing::trace!(
+            "Firehose program: LUN={}, Sector={}, Count={}, Bytes={}",
+            physical_partition,
+            start_sector,
+            num_sectors,
+            data.len()
+        );
+
+        let cmd = FirehoseCommand::Program {
+            sector_size: self.sector_size,
+            num_sectors,
+            physical_partition,
+            start_sector,
+            filename: None,
+        };
+
+        let resp = self.execute_command(transport, &cmd).await?;
+        if !resp.is_ack() {
+            tracing::error!(
+                error = resp.error_log.as_deref().unwrap_or("unknown"),
+                "Firehose program NAK"
+            );
+            return Err(FirehoseError::Nak {
+                command: "program".to_string(),
+                reason: resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+            });
+        }
+
+        transport.write(data).await?;
+
+        let final_resp_xml = self.read_response(transport).await?;
+        let final_resp =
+            FirehoseResponse::from_xml(&final_resp_xml).map_err(|e| FirehoseError::InvalidResponse { reason: e })?;
+        if !final_resp.is_ack() {
+            tracing::warn!(
+                error = ?final_resp.error_log,
+                "Firehose program: completion response was NAK"
+            );
+        }
+
+        let elapsed = start_time.elapsed().as_secs_f64();
+        tracing::trace!(
+            "Firehose program complete: {} bytes in {:.3}s ({:.2} MiB/s)",
+            data.len(),
+            elapsed,
+            (data.len() as f64 / 1024.0 / 1024.0) / elapsed
+        );
+
+        Ok(())
+    }
+
+    pub async fn erase_sectors(
+        &mut self,
+        transport: &mut dyn Transport,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<()> {
+        tracing::debug!(
+            "Firehose erase: LUN={}, sector={}, count={}",
+            physical_partition,
+            start_sector,
+            num_sectors
+        );
+
+        let cmd = FirehoseCommand::Erase {
+            sector_size: self.sector_size,
+            num_sectors,
+            physical_partition,
+            start_sector,
+        };
+
+        let resp = self.execute_command(transport, &cmd).await?;
+        if !resp.is_ack() {
+            tracing::error!("Firehose erase NAK: {}", resp.error_log.as_deref().unwrap_or("unknown"));
+            return Err(FirehoseError::Nak {
+                command: "erase".to_string(),
+                reason: resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+            });
+        }
+
+        tracing::debug!("Firehose erase complete");
+        Ok(())
+    }
+
+    pub async fn get_storage_info(&mut self, transport: &mut dyn Transport) -> Result<FirehoseResponse> {
+        self.execute_command(transport, &FirehoseCommand::GetStorageInfo).await
+    }
+
+    pub async fn reboot(&mut self, transport: &mut dyn Transport) -> Result<()> {
+        let cmd = FirehoseCommand::Power {
+            value: "reset".to_string(),
+        };
+        self.execute_command(transport, &cmd).await?;
+        Ok(())
+    }
+
+    pub async fn raw_xml(&mut self, transport: &mut dyn Transport, xml: &str) -> Result<FirehoseResponse> {
+        self.execute_command(transport, &FirehoseCommand::RawXml(xml.to_string()))
+            .await
+    }
+
+    /// Drain the device's initialization messages after Sahara handshake.
+    /// Waits up to 3s for the Firehose loader to boot, then drains any init messages.
+    pub async fn drain_initial_messages(&mut self, transport: &mut dyn Transport) -> Result<()> {
+        tracing::info!("[Firehose] Waiting for device to enter Firehose mode...");
+        transport.set_timeout(Duration::from_millis(500));
+
+        // Wait for first data (loader boot may take time)
+        let buf = &mut self.read_buf;
+        let mut got_data = false;
+        for attempt in 0..6 {
+            match transport.read(buf).await {
+                Ok(0) | Err(_) => {
+                    tracing::trace!("[Firehose] Waiting for loader boot (attempt {})...", attempt + 1);
+                    continue;
+                }
+                Ok(n) => {
+                    got_data = true;
+                    tracing::warn!("[Firehose] Drain got {} bytes: {:02X?}", n, &buf[..n]);
+                    tracing::warn!("[Firehose] Drain TXT: {}", String::from_utf8_lossy(&buf[..n]));
+                    let text = String::from_utf8_lossy(&buf[..n]);
+                    if text.contains("<response ") || text.contains("</data>") {
+                        tracing::warn!("[Firehose] Drain found valid response — NOT discarding");
+                        return Ok(());
+                    }
+                    break;
+                }
+            }
+        }
+
+        if !got_data {
+            tracing::warn!("[Firehose] No init data received after Sahara (device may be slow to boot)");
+            return Ok(());
+        }
+
+        // Drain remaining data
+        let mut total = 0usize;
+        loop {
+            match transport.read(buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    total += n;
+                    tracing::warn!("[Firehose] Drain extra {} bytes: {:02X?}", n, &buf[..n]);
+                    tracing::warn!("[Firehose] Drain TXT: {}", String::from_utf8_lossy(&buf[..n]));
+                    let text = String::from_utf8_lossy(&buf[..n]);
+                    if text.contains("<response ") || text.contains("</data>") {
+                        tracing::warn!("[Firehose] Drain found valid response — NOT discarding");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        tracing::info!("[Firehose] Init messages drained ({} bytes)", total);
+        Ok(())
+    }
+
+    pub fn sector_size(&self) -> u32 {
+        self.sector_size
+    }
+
+    pub fn max_payload_size(&self) -> u32 {
+        self.max_payload_size
+    }
+
+    pub fn is_initialized(&self) -> bool {
+        self.initialized
+    }
+}
+
+impl Default for FirehoseClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}

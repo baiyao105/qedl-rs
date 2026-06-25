@@ -1,0 +1,13 @@
+[package]
+name = "qedl-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "GPT parsing and partition operations for Qualcomm EDL"
+
+[dependencies]
+qedl-core.workspace = true
+qedl-firehose.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

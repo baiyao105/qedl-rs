@@ -1,0 +1,122 @@
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
+pub const VERSION: &str = env!("VERSION");
+pub const FULL_VERSION: &str = env!("FULL_VERSION");
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "qedl",
+    about = "A Qualcomm 9008 EDL Tool",
+    long_about = ABOUT,
+    version = VERSION,
+    long_version = FULL_VERSION,
+)]
+#[command(propagate_version = true)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+
+    #[command(flatten)]
+    pub global: GlobalArgs,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct GlobalArgs {
+    /// 指定串口（例如 COM3 或 /dev/ttyUSB0）
+    #[arg(long, global = true)]
+    pub port: Option<String>,
+
+    #[arg(long, global = true)]
+    pub serial: Option<String>,
+
+    #[arg(long, global = true, value_name = "FILE")]
+    pub loader: Option<PathBuf>,
+
+    /// 串口超时时间（毫秒）
+    #[arg(long, global = true, default_value = "30000", value_name = "MS")]
+    pub timeout: u64,
+
+    #[arg(long, global = true)]
+    pub dry_run: bool,
+
+    /// 日志级别（-v、-vv）
+    #[arg(long, short, global = true, action = clap::ArgAction::Count)]
+    pub verbose: u8,
+
+    #[arg(
+        long,
+        global = true,
+        num_args = 0..=1,
+        default_missing_value = "0",
+        value_name = "SECS"
+    )]
+    pub wait_device: Option<u64>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// 列出所有连接的 9008 设备
+    List,
+
+    /// 显示设备信息
+    Info,
+
+    /// 显示 GPT 分区表
+    Gpt,
+
+    /// 导出分区
+    Dump {
+        partition: String,
+        file: PathBuf,
+        /// 如果文件已存在，尝试从断点处继续下载
+        #[arg(long, short)]
+        resume: bool,
+    },
+
+    /// Dump 的别名
+    #[command(name = "read")]
+    Read {
+        partition: String,
+        file: PathBuf,
+        /// 如果文件已存在，尝试从断点处继续下载
+        #[arg(long, short)]
+        resume: bool,
+    },
+
+    /// 刷写分区
+    Write { partition: String, file: PathBuf },
+
+    /// 擦除分区
+    Erase { partition: String },
+
+    /// 根据 rawprogram.xml 刷写
+    Flash {
+        rawprogram: PathBuf,
+        patch: Option<PathBuf>,
+        /// 镜像文件所在目录（默认当前目录）
+        #[arg(long, value_name = "DIR")]
+        image_dir: Option<PathBuf>,
+    },
+
+    /// 校验分区
+    Verify { partition: String, file: PathBuf },
+
+    /// 重启设备
+    Reboot,
+
+    /// 发送自定义 XML
+    Xml {
+        #[arg(long, short = 'x')]
+        xml: Option<String>,
+
+        #[arg(long, short = 'f')]
+        file: Option<PathBuf>,
+    },
+}
+
+const ABOUT: &str = r#"qedl - A Qualcomm 9008 EDL Tool
+
+Repository:
+  https://github.com/baiyao105/qedl-rs
+"#;

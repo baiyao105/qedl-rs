@@ -1,0 +1,28 @@
+[package]
+name = "qedl-job"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Job orchestration for flash, dump, erase, and info operations"
+
+[dependencies]
+qedl-core.workspace = true
+qedl-transport.workspace = true
+qedl-sahara.workspace = true
+qedl-firehose.workspace = true
+qedl-storage.workspace = true
+qedl-image = { workspace = true, optional = true }
+thiserror.workspace = true
+tracing.workspace = true
+indicatif.workspace = true
+bytes.workspace = true
+md-5 = "0.10"
+hex = "0.4"
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt", "time"] }
+quick-xml.workspace = true
+
+[features]
+default = []
+sparse = ["dep:qedl-image"]

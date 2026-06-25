@@ -1,0 +1,16 @@
+[package]
+name = "qedl-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "USB/serial transport abstraction for Qualcomm EDL communication"
+
+[dependencies]
+qedl-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+serialport = "4"
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+async-trait = "0.1"

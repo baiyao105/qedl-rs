@@ -1,0 +1,637 @@
+use crate::context::{JobContext, XmlResponse};
+use crate::error::Result;
+use crate::jobs::{Job, JobResult};
+use async_trait::async_trait;
+use bytes::Bytes;
+use qedl_core::{
+    DeviceState, Event, EventSink, JobEvent, NoopProgress, PartitionInfo, ProgressReporter, Session, emit_event,
+};
+use qedl_firehose::FirehoseClient;
+use qedl_sahara::SaharaSession;
+use qedl_storage::{GptTable, PartitionMap};
+use qedl_transport::{DeviceEnumerator, DeviceInfo, SerialTransport, Transport};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+#[derive(Clone)]
+pub struct ExecutorConfig {
+    pub port: Option<String>,
+    pub serial: Option<String>,
+    pub loader: Option<PathBuf>,
+    pub timeout: Duration,
+    pub dry_run: bool,
+    pub verbose: bool,
+    pub max_retries: u32,
+    pub event_sink: Option<Arc<dyn EventSink>>,
+}
+
+impl Default for ExecutorConfig {
+    fn default() -> Self {
+        Self {
+            port: None,
+            serial: None,
+            loader: None,
+            timeout: Duration::from_secs(30),
+            dry_run: false,
+            verbose: false,
+            max_retries: 3,
+            event_sink: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for ExecutorConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecutorConfig")
+            .field("port", &self.port)
+            .field("serial", &self.serial)
+            .field("loader", &self.loader)
+            .field("timeout", &self.timeout)
+            .field("dry_run", &self.dry_run)
+            .field("verbose", &self.verbose)
+            .field("max_retries", &self.max_retries)
+            .field("event_sink", &self.event_sink.as_ref().map(|_| "<EventSink>"))
+            .finish()
+    }
+}
+
+impl ExecutorConfig {
+    pub fn builder() -> ExecutorConfigBuilder {
+        ExecutorConfigBuilder::new()
+    }
+}
+
+pub struct ExecutorConfigBuilder {
+    port: Option<String>,
+    serial: Option<String>,
+    loader: Option<PathBuf>,
+    timeout: Duration,
+    dry_run: bool,
+    verbose: bool,
+    max_retries: u32,
+    event_sink: Option<Arc<dyn EventSink>>,
+}
+
+impl ExecutorConfigBuilder {
+    pub fn new() -> Self {
+        Self {
+            port: None,
+            serial: None,
+            loader: None,
+            timeout: Duration::from_secs(30),
+            dry_run: false,
+            verbose: false,
+            max_retries: 3,
+            event_sink: None,
+        }
+    }
+
+    pub fn port(mut self, port: impl Into<String>) -> Self {
+        self.port = Some(port.into());
+        self
+    }
+
+    pub fn serial(mut self, serial: impl Into<String>) -> Self {
+        self.serial = Some(serial.into());
+        self
+    }
+
+    pub fn loader(mut self, loader: impl Into<PathBuf>) -> Self {
+        self.loader = Some(loader.into());
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    pub fn dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
+    pub fn verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
+    }
+
+    pub fn max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
+    pub fn event_sink(mut self, sink: Arc<dyn EventSink>) -> Self {
+        self.event_sink = Some(sink);
+        self
+    }
+
+    pub fn build(self) -> ExecutorConfig {
+        ExecutorConfig {
+            port: self.port,
+            serial: self.serial,
+            loader: self.loader,
+            timeout: self.timeout,
+            dry_run: self.dry_run,
+            verbose: self.verbose,
+            max_retries: self.max_retries,
+            event_sink: self.event_sink,
+        }
+    }
+}
+
+impl Default for ExecutorConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct JobExecutor {
+    config: ExecutorConfig,
+    device: Option<DeviceInfo>,
+    transport: Option<Box<dyn Transport>>,
+    firehose: FirehoseClient,
+    partitions: PartitionMap,
+    partition_infos: Vec<PartitionInfo>,
+    state: DeviceState,
+    session: Option<Session>,
+}
+
+impl JobExecutor {
+    pub fn new(config: ExecutorConfig) -> Self {
+        let firehose = FirehoseClient::new().with_event_sink(config.event_sink.clone());
+        Self {
+            config,
+            device: None,
+            transport: None,
+            firehose,
+            partitions: PartitionMap::new(),
+            partition_infos: Vec::new(),
+            state: DeviceState::Disconnected,
+            session: None,
+        }
+    }
+
+    pub fn emit(&self, event: JobEvent) {
+        emit_event(&self.config.event_sink, Event::Job(event));
+    }
+
+    pub fn connect(&mut self) -> Result<()> {
+        let device = if let Some(ref port) = self.config.port {
+            tracing::info!("Searching for device by port: {}", port);
+            DeviceEnumerator::find_by_port(port)?
+        } else if let Some(ref serial) = self.config.serial {
+            tracing::info!("Searching for device by serial: {}", serial);
+            DeviceEnumerator::find_by_serial(serial)?
+        } else {
+            tracing::info!("Auto-detecting 9008/90B8 device");
+            DeviceEnumerator::auto_select()?
+        };
+
+        tracing::info!("Device found: {} (PID=0x{:04X})", device, device.pid);
+
+        if device.is_90b8() {
+            tracing::warn!("Device is in DIAG mode (90B8), switching to EDL mode (9008)...");
+            DeviceEnumerator::switch_90b8_to_9008(&device.port, self.config.timeout.as_secs())?;
+            tracing::info!("90B8 -> 9008 switch successful, re-scanning...");
+            let device = if let Some(ref port) = self.config.port {
+                DeviceEnumerator::find_by_port(port)?
+            } else {
+                DeviceEnumerator::auto_select()?
+            };
+            tracing::info!("Device after switch: {} (PID=0x{:04X})", device, device.pid);
+            self.device = Some(device);
+            return Ok(());
+        }
+
+        self.device = Some(device);
+        self.state = DeviceState::Connected;
+        self.session = Some(Session::new(
+            qedl_core::DeviceInfo {
+                port: self.config.port.clone().unwrap_or_default(),
+                serial: self.config.serial.clone(),
+                product: None,
+                pid: 0x9008,
+                vid: 0x05C6,
+                description: None,
+            },
+            qedl_core::DeviceCapabilities::default(),
+            qedl_core::FirehoseInfo::default(),
+        ));
+        Ok(())
+    }
+
+    pub async fn handshake(&mut self) -> Result<()> {
+        let loader_path = self
+            .config
+            .loader
+            .as_ref()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "no loader specified (--loader)".to_string(),
+            })?;
+
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "not connected".to_string(),
+            })?;
+
+        tracing::info!("Opening serial port {} at 115200 baud", device.port);
+        let transport = SerialTransport::open(&device.port, 115200, self.config.timeout)?;
+
+        tracing::info!("Starting Sahara handshake with loader: {:?}", loader_path);
+        let sahara = SaharaSession::new(transport).with_event_sink(self.config.event_sink.clone());
+        match sahara
+            .handshake(loader_path, qedl_sahara::SaharaMode::ImageTransfer)
+            .await
+        {
+            Ok(transport) => {
+                tracing::info!("Sahara handshake complete, device in Firehose mode");
+                self.transport = Some(Box::new(transport));
+                self.state = DeviceState::Ready;
+            }
+            Err(e) => return Err(e.into()),
+        }
+
+        Ok(())
+    }
+
+    pub async fn init_firehose(&mut self) -> Result<()> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+
+        self.firehose.drain_initial_messages(transport.as_mut()).await?;
+
+        tracing::info!("Sending Firehose configure");
+        self.firehose.configure(transport.as_mut()).await?;
+        tracing::info!("Firehose configured successfully");
+
+        tracing::info!("Querying storage info");
+        match self.firehose.get_storage_info(transport.as_mut()).await {
+            Ok(storage_resp) => {
+                if let Some(name) = &storage_resp.memory_name {
+                    tracing::info!("Detected storage type: {}", name);
+                }
+                if let Some(ss) = storage_resp.sector_size {
+                    tracing::info!("Updating sector size: {} -> {}", self.firehose.sector_size, ss);
+                    self.firehose.sector_size = ss;
+                }
+                if let Some(ts) = storage_resp.total_sectors {
+                    tracing::info!("Total sectors: {}", ts);
+                    self.firehose.total_sectors = ts;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "getstorageinfo failed (NAK?), continuing anyway");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn load_gpt(&mut self) -> Result<()> {
+        tracing::info!("Loading GPT partition table from device");
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+
+        let sector_size = self.firehose.sector_size();
+        let total_sectors = self.firehose.total_sectors;
+
+        let max_lun = if self.firehose.memory_name.to_lowercase().contains("ufs") {
+            tracing::info!("Detected UFS storage, scanning LUNs 0-3");
+            4u8
+        } else {
+            tracing::info!("Detected eMMC storage, scanning LUN 0 only");
+            1u8
+        };
+
+        let luns: Vec<u8> = (0..max_lun).collect();
+        for &lun in &luns {
+            tracing::info!("Reading GPT from LUN {}", lun);
+            match read_gpt_for_lun(transport.as_mut(), &mut self.firehose, lun, sector_size, total_sectors).await {
+                Ok(table) => {
+                    if self.firehose.total_sectors == 0
+                        && table.primary_valid
+                        && let Some(hdr) = &table.header
+                    {
+                        let calculated_total = hdr.backup_lba + 1;
+                        tracing::info!(
+                            "Using GPT backup_lba to calculate total sectors: {} (from backup_lba {})",
+                            calculated_total,
+                            hdr.backup_lba
+                        );
+                        self.firehose.total_sectors = calculated_total;
+                    }
+
+                    let count = table.entries.len();
+                    for entry in &table.entries {
+                        let clean_name = entry.name.trim().trim_matches('\0').trim();
+                        tracing::debug!(
+                            "Partition: name='{}', LBA={}..{}, LUN={}",
+                            clean_name,
+                            entry.first_lba,
+                            entry.last_lba,
+                            lun
+                        );
+                    }
+                    self.partitions.add_table(table);
+                    tracing::info!("LUN {}: {} partitions loaded", lun, count);
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "LUN: no valid GPT found");
+                    if lun == 0 {
+                        return Err(e);
+                    }
+                    tracing::info!("LUN {}: no GPT, skipping to next", lun);
+                    continue;
+                }
+            }
+        }
+
+        self.partition_infos = self
+            .partitions
+            .all_entries()
+            .into_iter()
+            .map(|e| PartitionInfo {
+                name: e.name.clone(),
+                first_lba: e.first_lba,
+                last_lba: e.last_lba,
+                physical_partition: e.physical_partition,
+            })
+            .collect();
+
+        tracing::info!(
+            "GPT loading complete: {} partitions across {} LUNs",
+            self.partitions.total_partitions(),
+            self.partitions.luns().len()
+        );
+        Ok(())
+    }
+
+    pub async fn execute(&mut self, job: &dyn Job) -> Result<JobResult> {
+        if self.config.dry_run {
+            tracing::info!("Dry-run mode, skipping execution");
+            return Ok(JobResult {
+                success: true,
+                message: "dry-run: parsed successfully".to_string(),
+                steps_completed: 0,
+            });
+        }
+
+        if self.transport.is_none() {
+            return Err(crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            });
+        }
+
+        job.execute(self).await
+    }
+
+    pub fn device(&self) -> Option<&DeviceInfo> {
+        self.device.as_ref()
+    }
+
+    pub fn partitions(&self) -> &PartitionMap {
+        &self.partitions
+    }
+
+    pub fn firehose(&self) -> &FirehoseClient {
+        &self.firehose
+    }
+
+    pub fn state(&self) -> DeviceState {
+        self.state
+    }
+
+    pub fn session(&self) -> Option<&Session> {
+        self.session.as_ref()
+    }
+
+    pub fn partition_infos(&self) -> &[PartitionInfo] {
+        &self.partition_infos
+    }
+
+    pub async fn reboot(&mut self) -> Result<()> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+        self.firehose.reboot(transport.as_mut()).await?;
+        self.state = DeviceState::Resetting;
+        Ok(())
+    }
+
+    pub async fn init(&mut self) -> Result<()> {
+        self.connect()?;
+        self.handshake().await?;
+        self.init_firehose().await?;
+        self.load_gpt().await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl JobContext for JobExecutor {
+    async fn read_sectors(&mut self, physical_partition: u8, start_sector: u64, num_sectors: u64) -> Result<Bytes> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+        Ok(self
+            .firehose
+            .read_sectors(transport.as_mut(), physical_partition, start_sector, num_sectors)
+            .await?)
+    }
+
+    async fn write_sectors(
+        &mut self,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+        data: &[u8],
+    ) -> Result<()> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+        self.firehose
+            .program_sectors(transport.as_mut(), physical_partition, start_sector, num_sectors, data)
+            .await?;
+        Ok(())
+    }
+
+    fn sector_size(&self) -> u32 {
+        self.firehose.sector_size()
+    }
+
+    fn max_payload_size(&self) -> u32 {
+        self.firehose.max_payload_size()
+    }
+
+    fn storage_name(&self) -> &str {
+        &self.firehose.memory_name
+    }
+
+    fn total_sectors(&self) -> u64 {
+        self.firehose.total_sectors
+    }
+
+    fn find_partition(&self, name: &str) -> Option<&PartitionInfo> {
+        self.partition_infos.iter().find(|p| p.name == name)
+    }
+
+    fn all_partitions(&self) -> Vec<&PartitionInfo> {
+        self.partition_infos.iter().collect()
+    }
+
+    async fn reboot(&mut self) -> Result<()> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+        self.firehose.reboot(transport.as_mut()).await?;
+        self.state = DeviceState::Resetting;
+        Ok(())
+    }
+
+    async fn raw_xml(&mut self, xml: &str) -> Result<XmlResponse> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+        let resp = self.firehose.raw_xml(transport.as_mut(), xml).await?;
+        Ok(XmlResponse {
+            is_ack: resp.is_ack(),
+            error_log: resp.error_log,
+        })
+    }
+
+    async fn refresh_storage_info(&mut self) -> Result<Vec<String>> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+        let resp = self.firehose.get_storage_info(transport.as_mut()).await?;
+        if let Some(memory_name) = resp.memory_name {
+            self.firehose.memory_name = memory_name;
+        }
+        if let Some(sector_size) = resp.sector_size {
+            self.firehose.sector_size = sector_size;
+        }
+        if let Some(total_sectors) = resp.total_sectors {
+            self.firehose.total_sectors = total_sectors;
+        }
+        Ok(resp.logs)
+    }
+
+    fn progress(&self) -> &dyn ProgressReporter {
+        static NOOP: NoopProgress = NoopProgress;
+        &NOOP
+    }
+}
+
+async fn read_gpt_for_lun(
+    transport: &mut dyn Transport,
+    firehose: &mut FirehoseClient,
+    lun: u8,
+    sector_size: u32,
+    total_sectors: u64,
+) -> Result<GptTable> {
+    tracing::debug!("Reading LBA 1 (GPT header) from LUN {}...", lun);
+    let lba1_data = firehose.read_sectors(transport, lun, 1, 1).await?;
+    tracing::debug!("Read {} bytes from LBA 1", lba1_data.len());
+
+    let gpt = match GptTable::parse(&lba1_data, &[], lun, sector_size) {
+        Ok(g) => {
+            tracing::debug!("LUN {}: Primary GPT header valid", lun);
+            g
+        }
+        Err(e) => {
+            tracing::warn!(
+                "LUN {}: Primary GPT header invalid ({}), falling back to Backup GPT...",
+                lun,
+                e
+            );
+            if total_sectors == 0 {
+                tracing::error!("LUN {}: cannot fall back to Backup GPT (total_sectors=0)", lun);
+                return Err(e.into());
+            }
+            let backup_lba = total_sectors - 1;
+            tracing::debug!("Reading Backup GPT header at LBA {}", backup_lba);
+            let backup_data = firehose.read_sectors(transport, lun, backup_lba, 1).await?;
+            GptTable::parse(&backup_data, &[], lun, sector_size)?
+        }
+    };
+
+    let entry_sectors = gpt.header.as_ref().map_or(0, |h| {
+        (h.num_partition_entries * h.partition_entry_size).div_ceil(sector_size)
+    }) as u64;
+
+    let entry_lba = gpt.header.as_ref().map_or(2, |h| h.partition_entry_start_lba);
+
+    if entry_sectors > 0 {
+        tracing::debug!(
+            "Reading {} GPT partition entries at LBA {} ({} sectors)...",
+            gpt.header.as_ref().map_or(0, |h| h.num_partition_entries),
+            entry_lba,
+            entry_sectors
+        );
+        let entries_data = firehose.read_sectors(transport, lun, entry_lba, entry_sectors).await?;
+        tracing::debug!("Read {} bytes of GPT entries", entries_data.len());
+        let gpt = GptTable::parse(&lba1_data, &entries_data, lun, sector_size)?;
+
+        if total_sectors > 0 {
+            let backup_lba = total_sectors - 1;
+            let backup_entries_lba = backup_lba - entry_sectors;
+            tracing::debug!("Verifying Backup GPT entries at LBA {}...", backup_entries_lba);
+            match firehose
+                .read_sectors(transport, lun, backup_entries_lba, entry_sectors)
+                .await
+            {
+                Ok(backup_entries) => {
+                    let backup_valid = !backup_entries.is_empty() && backup_entries.len() == entries_data.len();
+                    if !backup_valid {
+                        tracing::warn!("LUN {}: Backup GPT entries mismatch", lun);
+                    } else {
+                        tracing::debug!("LUN {}: Backup GPT entries verified OK", lun);
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("LUN {}: could not verify Backup GPT: {}", lun, e);
+                }
+            }
+        }
+
+        tracing::info!(
+            "LUN {}: GPT loaded ({} entries)",
+            lun,
+            gpt.header.as_ref().map_or(0, |h| h.num_partition_entries)
+        );
+        return Ok(gpt);
+    }
+
+    tracing::warn!("LUN {}: GPT header present but entries count is 0", lun);
+    Ok(gpt)
+}

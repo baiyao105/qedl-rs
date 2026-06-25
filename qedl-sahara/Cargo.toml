@@ -1,0 +1,16 @@
+[package]
+name = "qedl-sahara"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Qualcomm Sahara handshake protocol implementation"
+
+[dependencies]
+qedl-core.workspace = true
+qedl-transport.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt", "time"] }

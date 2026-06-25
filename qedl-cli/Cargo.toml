@@ -1,0 +1,24 @@
+[package]
+name = "qedl-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI tool for Qualcomm EDL 9008 mode flashing"
+
+[[bin]]
+name = "qedl"
+path = "src/main.rs"
+
+[build-dependencies]
+chrono.workspace = true
+
+[dependencies]
+qedl = { workspace = true, features = ["full"] }
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-indicatif.workspace = true
+indicatif.workspace = true
+color-eyre.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

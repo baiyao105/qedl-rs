@@ -1,0 +1,17 @@
+[package]
+name = "qedl-firehose"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Qualcomm Firehose XML command engine"
+
+[dependencies]
+qedl-core.workspace = true
+qedl-transport.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+quick-xml.workspace = true
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt", "time"] }

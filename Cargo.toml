@@ -1,0 +1,52 @@
+[workspace]
+members = [
+    "qedl",
+    "qedl-core",
+    "qedl-transport",
+    "qedl-sahara",
+    "qedl-firehose",
+    "qedl-storage",
+    "qedl-image",
+    "qedl-job",
+    "qedl-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["baiyao105"]
+repository = "https://github.com/baiyao105/qedl-rs"
+homepage = "https://github.com/baiyao105/qedl-rs"
+keywords = ["qualcomm", "qualcomm-edl", "sahara", "qualcomm-flash"]
+categories = ["embedded", "hardware-support"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+panic = "abort"
+
+[workspace.dependencies]
+qedl-core      = { path = "qedl-core", version = "0.1.0" }
+qedl-transport = { path = "qedl-transport", version = "0.1.0" }
+qedl-sahara    = { path = "qedl-sahara", version = "0.1.0" }
+qedl-firehose  = { path = "qedl-firehose", version = "0.1.0" }
+qedl-storage   = { path = "qedl-storage", version = "0.1.0" }
+qedl-image     = { path = "qedl-image", version = "0.1.0" }
+qedl-job       = { path = "qedl-job", version = "0.1.0" }
+qedl           = { path = "qedl", version = "0.1.0" }
+
+thiserror = "2"
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
+tracing-indicatif = "0.3"
+indicatif = "0.17"
+clap = { version = "4", features = ["derive"] }
+quick-xml = "0.37"
+color-eyre = "0.6"
+chrono = "0.4"
+bytes = "1"

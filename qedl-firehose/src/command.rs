@@ -1,0 +1,105 @@
+//! Firehose XML 命令定义
+//!
+//! 构建发送给设备的 XML 命令。Firehose 层只负责 XML 构建和 ACK 解析，
+//! 不理解命令语义，保持最大兼容性。
+
+#[derive(Debug, Clone)]
+pub enum FirehoseCommand {
+    Configure {
+        memory_name: String,
+        target_name: String,
+        skip_storage_init: bool,
+        zlp_aware_host: bool,
+        max_payload_size: u32,
+    },
+    Read {
+        sector_size: u32,
+        num_sectors: u64,
+        physical_partition: u8,
+        start_sector: u64,
+    },
+    /// 写入扇区（program 命令，后续跟 binary payload）
+    Program {
+        sector_size: u32,
+        num_sectors: u64,
+        physical_partition: u8,
+        start_sector: u64,
+        filename: Option<String>,
+    },
+    Erase {
+        sector_size: u32,
+        num_sectors: u64,
+        physical_partition: u8,
+        start_sector: u64,
+    },
+    GetStorageInfo,
+    Power {
+        value: String, // "reset", "off", etc.
+    },
+    /// 原始 XML 透传（兜底）
+    RawXml(String),
+}
+
+impl FirehoseCommand {
+    pub fn to_xml(&self) -> String {
+        match self {
+            Self::Configure {
+                memory_name,
+                target_name: _,
+                skip_storage_init: _,
+                zlp_aware_host: _,
+                max_payload_size,
+            } => {
+                // Minimal QFIL-compatible configure: many loaders reject extra attributes
+                format!(
+                    r#"<configure MemoryName="{}" Verbose="0" MaxPayloadSizeToTargetInBytes="{}" />"#,
+                    memory_name, max_payload_size
+                )
+            }
+            Self::Read {
+                sector_size,
+                num_sectors,
+                physical_partition,
+                start_sector,
+            } => {
+                format!(
+                    r#"<read SECTOR_SIZE_IN_BYTES="{}" num_partition_sectors="{}" physical_partition_number="{}" start_sector="{}" />"#,
+                    sector_size, num_sectors, physical_partition, start_sector
+                )
+            }
+            Self::Program {
+                sector_size,
+                num_sectors,
+                physical_partition,
+                start_sector,
+                filename,
+            } => {
+                let mut xml = format!(
+                    r#"<program SECTOR_SIZE_IN_BYTES="{}" num_partition_sectors="{}" physical_partition_number="{}" start_sector="{}""#,
+                    sector_size, num_sectors, physical_partition, start_sector
+                );
+                if let Some(f) = filename {
+                    xml.push_str(&format!(r#" filename="{}""#, f));
+                }
+                xml.push_str(" />");
+                xml
+            }
+            Self::Erase {
+                sector_size,
+                num_sectors,
+                physical_partition,
+                start_sector,
+            } => {
+                format!(
+                    r#"<erase SECTOR_SIZE_IN_BYTES="{}" num_partition_sectors="{}" physical_partition_number="{}" start_sector="{}" />"#,
+                    sector_size, num_sectors, physical_partition, start_sector
+                )
+            }
+            Self::GetStorageInfo => "<getstorageinfo />".to_string(),
+            Self::Power { value } => {
+                format!(r#"<power value="{}" />"#, value)
+            }
+            Self::RawXml(xml) => xml.clone(),
+        }
+    }
+}

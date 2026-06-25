@@ -1,0 +1,62 @@
+[changelog]
+body = """
+{% if version -%}
+## qedl [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## [Unreleased]
+{% endif %}
+
+{% for group, commits in commits | group_by(attribute="group") %}
+
+### {{ group | trim }}
+
+{% if group == "<!-- 11 -->📝 Other" %}
+<details>
+<summary>Show details</summary>
+{% endif %}
+
+{% for commit in commits | unique(attribute="message") -%}
+- {% if commit.scope %}**{{ commit.scope }}**: {% endif %}\
+{% if commit.breaking %}⚠️ BREAKING: {% endif %}\
+{{ commit.message | upper_first }}
+{% endfor %}
+
+{% if group == "<!-- 11 -->📝 Other" %}
+</details>
+{% endif %}
+
+{% endfor %}
+"""
+
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+
+commit_parsers = [
+    { message = "^chore\\(release\\)", skip = true},
+    { message = "^feat", group = "<!-- 00 -->⛰️  Features" },
+    { message = "^fix", group = "<!-- 01 -->🐛 Bug Fixes" },
+    { message = "^doc", group = "<!-- 02 -->📚 Documentation" },
+    { message = "^style", group = "<!-- 03 -->🎨 Styles" },
+    { message = "^refactor", group = "<!-- 04 -->🚜 Refactoring" },
+    { message = "^perf", group = "<!-- 05 -->⚡ Performance" },
+    { message = "^test", group = "<!-- 06 -->🧪 Tests" },
+    { message = "^build", group = "<!-- 07 -->Builds"},
+    { message = "^chore", group = "<!-- 09 -->⚙️ Chores" },
+    { message = "^revert", group = "<!-- 10 -->◀️ Reverts" },
+    { message = "^chore\\(deps.*\\)", skip = true },
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^chore\\(prerelease\\)", skip = true },
+    { message = ".*", group = "<!-- 11 -->📝 Other" }
+]
+
+filter_everyone = false
+protect_breaking = false
+
+[remote.github]
+owner = "baiyao105"
+repo = "qedl-rs"

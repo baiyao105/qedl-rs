@@ -1,0 +1,21 @@
+[package]
+name = "qedl-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Core types and error definitions for QEDL"
+
+[features]
+default = []
+gui = []
+
+[dependencies]
+thiserror = "2"
+quick-xml = "0.37"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

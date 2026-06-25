@@ -1,0 +1,16 @@
+[package]
+name = "qedl-image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rawprogram/patch XML parsing and sparse image expansion"
+
+[dependencies]
+qedl-core.workspace = true
+quick-xml.workspace = true
+thiserror.workspace = true
+md-5 = "0.10"
+crc32fast = "1.4"
+hex = "0.4"
+bytes.workspace = true
