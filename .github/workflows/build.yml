@@ -1,0 +1,82 @@
+name: Build
+
+on:
+  push:
+    branches: ['master']
+    tags: ['v*']
+    paths-ignore:
+      - "**/*.md"
+      - "**/*.txt"
+      - "docs/**"
+      - ".gitignore"
+      - ".gitattributes"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/DISCUSSION_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE*"
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Create a release'
+        required: false
+        type: boolean
+        default: false
+      tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: false
+        type: string
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+    with:
+      is_release: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.release == true) }}
+
+  build:
+    needs: [checks]
+    if: always() && ( github.ref_type != 'tag' || needs.checks.outputs.check_passed == 'true' || needs.checks.outputs.skip_checks == 'true' )
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release
+        shell: bash
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          TARGET_DIR="target/${{ matrix.target }}/release"
+          PKG_DIR="qedl-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "$PKG_DIR"
+          cp "$TARGET_DIR/qedl-cli.exe" "$PKG_DIR/"
+          cp "$TARGET_DIR/qedl-cli.pdb" "$PKG_DIR/" 2>/dev/null || true
+          mkdir -p artifacts
+          cp -r "$PKG_DIR" artifacts/
+          cd artifacts
+          7z a "${PKG_DIR}.zip" "${PKG_DIR}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: qedl-${{ github.ref_name }}-${{ matrix.target }}
+          path: artifacts/*
+
+  release:
+    needs: [checks, build]
+    if: (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.release == true)) && (needs.checks.outputs.check_passed == 'true' || needs.checks.outputs.skip_checks == 'true')
+    permissions:
+      id-token: write
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      artifact_name: qedl-${{ github.ref_name }}-${{ matrix.target }}
+      tag: ${{ inputs.tag || github.ref_name }}

@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      artifact_name:
+        required: true
+        type: string
+      tag:
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: release-artifacts
+
+      - name: Import GPG key
+        if: ${{ inputs.tag != '' }}
+        id: import-gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          git_tag_gpgsign: true
+
+      - name: Create Tag
+        if: ${{ inputs.tag != '' }}
+        run: |
+          tag_name="${{ inputs.tag }}"
+          echo "[DEBUG] 创建tag: $tag_name"
+          if git rev-parse "$tag_name" >/dev/null 2>&1; then
+            echo "[DEBUG] 标签 $tag_name 已存在"
+          else
+            tag_message="Release $tag_name"
+            git tag -s "$tag_name" -m "$tag_message"
+            git push origin "$tag_name"
+          fi
+
+      - name: Set up git-cliff
+        uses: kenji-miyake/setup-git-cliff@v2
+
+      - name: Generate a changelog
+        id: changelog
+        shell: bash
+        run: |
+          git cliff --config .github/.git-cliff.toml --latest --output CHANGELOG_SECTION.md
+          {
+            echo "changelog<<EOF"
+            cat CHANGELOG_SECTION.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute SHA256
+        id: sha256
+        shell: bash
+        run: |
+          cd release-artifacts
+          {
+            echo "sha256<<EOF"
+            echo ""
+            echo "---"
+            echo "### SHA256 Checksums"
+            echo ""
+            echo "| File | SHA256 |"
+            echo "|------|--------|"
+            for f in *; do
+              sha=$(sha256sum "$f" | cut -d' ' -f1)
+              echo "| $f | $sha |"
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: qedl ${{ inputs.tag || github.ref_name }}
+          draft: true
+          make_latest: true
+          generate_release_notes: false
+          body: |
+            ${{ steps.changelog.outputs.changelog }}
+            ${{ steps.sha256.outputs.sha256 }}
+          files: release-artifacts/*
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
