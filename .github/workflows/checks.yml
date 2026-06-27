@@ -43,7 +43,7 @@ jobs:
           COMMIT_MSG=$(git log -1 --pretty=%B)
           if echo "$COMMIT_MSG" | grep -qi "skip-checks"; then
             echo "skip_checks=true" >> "$GITHUB_OUTPUT"
-            echo "### Skip checks found in commit message" >> "$GITHUB_SUMMARY"
+            echo "### Skip checks found in commit message" >> "$GITHUB_STEP_SUMMARY"
             ::group::skip_checks
             echo "[DEBUG] Commit message: $COMMIT_MSG"
             ::endgroup::
@@ -52,7 +52,7 @@ jobs:
             ::group::skip_checks
             echo "[DEBUG] Commit message: $COMMIT_MSG"
             ::endgroup::
-            echo "### No skip-checks found in commit message" >> "$GITHUB_SUMMARY"
+            echo "### No skip-checks found in commit message" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Setup sccache
@@ -85,21 +85,23 @@ jobs:
 
       - name: Aggregate result
         id: aggregate
+        if: always()
         shell: bash
         run: |
-          if [[ '${{ steps.fmt.outcome }}' == 'success' && \
-                '${{ steps.clippy.outcome }}' == 'success' && \
-                '${{ steps.test.outcome }}' == 'success' ]]; then
+          FMT_OUTCOME="${{ steps.fmt.outcome }}"
+          CLIPPY_OUTCOME="${{ steps.clippy.outcome }}"
+          TEST_OUTCOME="${{ steps.test.outcome }}"
+          if [ "$FMT_OUTCOME" = "success" ] && [ "$CLIPPY_OUTCOME" = "success" ] && [ "$TEST_OUTCOME" = "success" ]; then
             echo "check_passed=true" >> "$GITHUB_OUTPUT"
-            echo "### All checks passed" >> "$GITHUB_SUMMARY"
-            echo "- fmt: ${{ steps.fmt.outcome }}" >> "$GITHUB_SUMMARY"
-            echo "- clippy: ${{ steps.clippy.outcome }}" >> "$GITHUB_SUMMARY"
-            echo "- test: ${{ steps.test.outcome }}" >> "$GITHUB_SUMMARY"
+            echo "### All checks passed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- fmt: $FMT_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+            echo "- clippy: $CLIPPY_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+            echo "- test: $TEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "check_passed=false" >> "$GITHUB_OUTPUT"
-            echo "### Some checks failed" >> "$GITHUB_SUMMARY"
-            echo "- fmt: ${{ steps.fmt.outcome }}" >> "$GITHUB_SUMMARY"
-            echo "- clippy: ${{ steps.clippy.outcome }}" >> "$GITHUB_SUMMARY"
-            echo "- test: ${{ steps.test.outcome }}" >> "$GITHUB_SUMMARY"
+            echo "### Some checks failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- fmt: $FMT_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+            echo "- clippy: $CLIPPY_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+            echo "- test: $TEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
