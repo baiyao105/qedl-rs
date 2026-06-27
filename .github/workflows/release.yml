@@ -53,6 +53,12 @@ jobs:
             git push origin "$tag_name"
           fi
 
+      - name: Attest artifacts
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-path: release-artifacts/*
+
       - name: Set up git-cliff
         uses: kenji-miyake/setup-git-cliff@v2
 
@@ -73,17 +79,33 @@ jobs:
         run: |
           cd release-artifacts
           {
-            echo "sha256<<EOF"
+            echo "Build Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "Build ID: ${{ github.run_id }}"
+            echo "Commit: ${{ github.sha }}"
             echo ""
             echo "---"
-            echo "### SHA256 Checksums"
             echo ""
-            echo "| File | SHA256 |"
-            echo "|------|--------|"
-            for f in *; do
-              sha=$(sha256sum "$f" | cut -d' ' -f1)
-              echo "| $f | $sha |"
-            done
+            echo "## The File Information"
+            echo ""
+            echo '<div style="overflow-x: auto; white-space: nowrap;">'
+            echo ""
+            echo "| File | Size (MB) | MD5 |"
+            echo "|--------|----------|-----|"
+          } > file-info.md
+          for f in *; do
+            if [ -f "$f" ]; then
+              SIZE=$(du -m "$f" | cut -f1)
+              MD5=$(md5sum "$f" | cut -d' ' -f1)
+              echo "| $f | $SIZE | $MD5 |" >> file-info.md
+            fi
+          done
+          echo "" >> file-info.md
+          echo "</div>" >> file-info.md
+          echo "" >> file-info.md
+          cat file-info.md >> $GITHUB_STEP_SUMMARY
+          {
+            echo "files_info<<EOF"
+            cat file-info.md
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -97,8 +119,10 @@ jobs:
           generate_release_notes: false
           body: |
             ${{ steps.changelog.outputs.changelog }}
-            ${{ steps.sha256.outputs.sha256 }}
-          files: release-artifacts/*
+            ${{ steps.sha256.outputs.files_info }}
+          files: |
+            release-artifacts/*
+            ${{ steps.attest.outputs.bundle-path }}
 
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth

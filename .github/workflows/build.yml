@@ -13,6 +13,17 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/DISCUSSION_TEMPLATE/**"
       - ".github/PULL_REQUEST_TEMPLATE*"
+  pull_request:
+    branches: ['master']
+    paths-ignore:
+      - "**/*.md"
+      - "**/*.txt"
+      - "docs/**"
+      - ".gitignore"
+      - ".gitattributes"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/DISCUSSION_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE*"
   workflow_dispatch:
     inputs:
       release:
@@ -25,6 +36,9 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   checks:
     uses: ./.github/workflows/checks.yml
@@ -32,22 +46,39 @@ jobs:
       is_release: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.release == true) }}
 
   build:
-    needs: [checks]
-    if: always() && ( github.ref_type != 'tag' || needs.checks.outputs.check_passed == 'true' || needs.checks.outputs.skip_checks == 'true' )
+    if: always()
     runs-on: windows-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         target: [x86_64-pc-windows-msvc]
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust toolchain for ${{ matrix.target }}
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
       - name: Build release
         shell: bash
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+          echo "[DEBUG] sccache stats:"
+          sccache --show-stats
         env:
           RUSTFLAGS: -C target-feature=+crt-static
 
@@ -56,9 +87,14 @@ jobs:
         run: |
           TARGET_DIR="target/${{ matrix.target }}/release"
           PKG_DIR="qedl-${{ github.ref_name }}-${{ matrix.target }}"
+          echo "::group::Prepare artifacts"
+          ls target
+          echo "[DEBUG]"
+          ls "$TARGET_DIR"
+          echo "::endgroup::"
           mkdir -p "$PKG_DIR"
-          cp "$TARGET_DIR/qedl-cli.exe" "$PKG_DIR/"
-          cp "$TARGET_DIR/qedl-cli.pdb" "$PKG_DIR/" 2>/dev/null || true
+          cp "$TARGET_DIR/qedl.exe" "$PKG_DIR/"
+          cp "$TARGET_DIR/qedl.pdb" "$PKG_DIR/" 2>/dev/null || true
           mkdir -p artifacts
           cp -r "$PKG_DIR" artifacts/
           cd artifacts
