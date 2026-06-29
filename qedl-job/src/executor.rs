@@ -219,16 +219,19 @@ impl JobExecutor {
             };
             tracing::info!("Device after switch: {} (PID=0x{:04X})", device, device.pid);
             let switched_port = device.port.clone();
+            let serial = device.serial.clone();
+            let product = device.product.clone();
+            let description = device.description.clone();
             self.device = Some(device);
             self.state = DeviceState::Connected;
             self.session = Some(Session::new(
                 qedl_core::DeviceInfo {
                     port: switched_port,
-                    serial: None,
-                    product: None,
+                    serial,
+                    product: product.clone(),
                     pid: 0x9008,
                     vid: 0x05C6,
-                    description: None,
+                    description,
                     mode: qedl_core::DeviceMode::Edl,
                 },
                 qedl_core::DeviceCapabilities::default(),
@@ -237,17 +240,24 @@ impl JobExecutor {
             return Ok(());
         }
 
+        let port = device.port.clone();
+        let serial = device.serial.clone();
+        let product = device.product.clone();
+        let pid = device.pid;
+        let vid = device.vid;
+        let description = device.description.clone();
+        let mode = device.mode;
         self.device = Some(device);
         self.state = DeviceState::Connected;
         self.session = Some(Session::new(
             qedl_core::DeviceInfo {
-                port: self.config.port.clone().unwrap_or_default(),
-                serial: self.config.serial.clone(),
-                product: None,
-                pid: 0x9008,
-                vid: 0x05C6,
-                description: None,
-                mode: qedl_core::DeviceMode::Edl,
+                port,
+                serial,
+                product,
+                pid,
+                vid,
+                description,
+                mode,
             },
             qedl_core::DeviceCapabilities::default(),
             qedl_core::FirehoseInfo::default(),
@@ -323,6 +333,14 @@ impl JobExecutor {
             Err(e) => {
                 tracing::warn!(error = %e, "getstorageinfo failed (NAK?), continuing anyway");
             }
+        }
+
+        // Write back real Firehose info to session
+        if let Some(ref mut session) = self.session {
+            session.firehose.sector_size = self.firehose.sector_size;
+            session.firehose.max_payload_size = self.firehose.max_payload_size;
+            session.capabilities.memory_type = self.firehose.memory_name.clone();
+            session.capabilities.total_sectors = self.firehose.total_sectors;
         }
 
         Ok(())
@@ -471,6 +489,71 @@ impl JobExecutor {
         self.handshake().await?;
         self.init_firehose().await?;
         self.load_gpt().await?;
+        Ok(())
+    }
+
+    /// Connect + Firehose init, skipping Sahara handshake if device is already in Firehose mode.
+    pub async fn init_firehose_only(&mut self) -> Result<()> {
+        self.connect()?;
+
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "not connected".to_string(),
+            })?;
+
+        tracing::info!("Opening serial port {} at 115200 baud", device.port);
+        let transport = SerialTransport::open(&device.port, 115200, self.config.timeout)?;
+
+        // Try Firehose configure directly — device may already be in Firehose mode
+        let mut boxed: Box<dyn Transport> = Box::new(transport);
+        tracing::info!("Attempting direct Firehose configure (skip Sahara)");
+        self.firehose.drain_initial_messages(boxed.as_mut()).await?;
+        match self.firehose.configure(boxed.as_mut()).await {
+            Ok(()) => {
+                tracing::info!("Device responded to Firehose configure — already in Firehose mode");
+                self.transport = Some(boxed);
+                self.state = DeviceState::Ready;
+            }
+            Err(e) => {
+                tracing::info!("Direct configure failed ({}), falling back to Sahara handshake", e);
+                drop(boxed);
+                self.handshake().await?;
+                self.init_firehose().await?;
+                return Ok(());
+            }
+        }
+
+        tracing::info!("Querying storage info");
+        match self
+            .firehose
+            .get_storage_info(self.transport.as_mut().unwrap().as_mut())
+            .await
+        {
+            Ok(storage_resp) => {
+                if let Some(name) = &storage_resp.memory_name {
+                    tracing::info!("Detected storage type: {}", name);
+                }
+                if let Some(ss) = storage_resp.sector_size {
+                    self.firehose.sector_size = ss;
+                }
+                if let Some(ts) = storage_resp.total_sectors {
+                    self.firehose.total_sectors = ts;
+                }
+                // Update session with real Firehose info
+                if let Some(ref mut session) = self.session {
+                    session.firehose.sector_size = self.firehose.sector_size;
+                    session.firehose.max_payload_size = self.firehose.max_payload_size;
+                    session.capabilities.memory_type = self.firehose.memory_name.clone();
+                    session.capabilities.total_sectors = self.firehose.total_sectors;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "getstorageinfo failed, continuing");
+            }
+        }
+
         Ok(())
     }
 }

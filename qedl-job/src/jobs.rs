@@ -90,6 +90,7 @@ impl Job for DumpJob {
         let mut output_file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(!self.resume)
             .append(self.resume)
             .open(&self.output_path)?;
 
@@ -681,23 +682,40 @@ impl Job for VerifyJob {
 
         let physical_partition = entry.physical_partition;
         let first_lba = entry.first_lba;
-        let last_lba = entry.last_lba;
 
         let sector_size = ctx.sector_size() as u64;
-        let total_sectors = last_lba - first_lba + 1;
-        let total_bytes = total_sectors * sector_size;
 
-        tracing::info!("Calculating checksum of local image: {:?}", self.image_path);
-        let local_md5 = checksum::compute_file_md5(&self.image_path)?;
-        tracing::info!("Local file MD5: {}", local_md5);
+        // Read local file, expanding sparse images if needed
+        let raw_file = std::fs::read(&self.image_path)?;
+        let is_sparse = raw_file.len() >= 4 && u32::from_le_bytes(raw_file[..4].try_into().unwrap()) == 0x52415350;
+        let (image_data, image_label) = if is_sparse {
+            tracing::info!("Local image is sparse, expanding for verification");
+            let expanded = qedl_image::sparse::expand_to_vec(&raw_file)?;
+            (expanded, "expanded".to_string())
+        } else {
+            (raw_file, "raw".to_string())
+        };
 
-        tracing::info!("Reading partition '{}' for verification", self.partition_name);
+        let image_len = image_data.len() as u64;
+        let sectors_to_read = image_len.div_ceil(sector_size);
+        let verify_bytes = sectors_to_read * sector_size;
+
+        tracing::info!(
+            "Verifying {} image ({} bytes, {} sectors) against partition '{}'",
+            image_label,
+            image_len,
+            sectors_to_read,
+            self.partition_name
+        );
+
+        let local_md5 = checksum::compute_md5(&image_data);
+        tracing::info!("Local image MD5: {}", local_md5);
 
         let max_payload = ctx.max_payload_size() as u64;
         let sectors_per_chunk = (max_payload / sector_size).max(1);
 
         let mut sector = first_lba;
-        let mut remaining = total_sectors;
+        let mut remaining = sectors_to_read;
         let mut hasher = md5::Md5::new();
 
         let start_time = Instant::now();
@@ -706,7 +724,7 @@ impl Job for VerifyJob {
                 .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
                 .expect("valid progress template")
                 .progress_chars("#>-");
-            let pb = ProgressBar::new(total_bytes);
+            let pb = ProgressBar::new(verify_bytes);
             pb.set_style(style);
             Some(pb)
         } else {
@@ -741,8 +759,9 @@ impl Job for VerifyJob {
             Ok(JobResult {
                 success: true,
                 message: format!(
-                    "Verification passed! MD5: {} (took {:.2}s)",
+                    "Verification passed! MD5: {} ({} bytes, took {:.2}s)",
                     partition_md5,
+                    image_len,
                     start_time.elapsed().as_secs_f64()
                 ),
                 steps_completed: 1,

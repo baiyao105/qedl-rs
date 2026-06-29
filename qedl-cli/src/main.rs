@@ -103,8 +103,11 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
         Commands::Xml { xml, file } => {
             client.init_firehose_only().await?;
             let xml_content = resolve_xml_input(xml, file)?;
-            client.raw_xml(&xml_content).await?;
-            println!("XML command sent successfully.");
+            let result = client.raw_xml(&xml_content).await?;
+            println!("{}", result.message);
+            if !result.success {
+                process::exit(1);
+            }
             Ok(())
         }
         Commands::Dump {

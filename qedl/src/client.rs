@@ -74,10 +74,9 @@ impl QedlClient {
     }
 
     /// Initializes Firehose without loading GPT. For commands that don't need partitions.
+    /// Skips Sahara handshake if the device is already in Firehose mode.
     pub async fn init_firehose_only(&mut self) -> Result<()> {
-        self.connect()?;
-        self.handshake().await?;
-        self.init_firehose().await?;
+        self.executor.init_firehose_only().await?;
         Ok(())
     }
 

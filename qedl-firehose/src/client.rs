@@ -468,7 +468,13 @@ impl FirehoseClient {
         let cmd = FirehoseCommand::Power {
             value: "reset".to_string(),
         };
-        self.execute_command(transport, &cmd).await?;
+        let resp = self.execute_command(transport, &cmd).await?;
+        if !resp.is_ack() {
+            return Err(FirehoseError::Nak {
+                command: "reboot".to_string(),
+                reason: resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+            });
+        }
         Ok(())
     }
 
