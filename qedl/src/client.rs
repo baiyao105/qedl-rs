@@ -73,6 +73,14 @@ impl QedlClient {
         Ok(())
     }
 
+    /// Initializes Firehose without loading GPT. For commands that don't need partitions.
+    pub async fn init_firehose_only(&mut self) -> Result<()> {
+        self.connect()?;
+        self.handshake().await?;
+        self.init_firehose().await?;
+        Ok(())
+    }
+
     /// Flashes raw program and patch images to the device.
     #[cfg(feature = "sparse")]
     pub async fn flash(&mut self, rawprogram: &Path, patch: Option<&Path>, image_dir: &Path) -> Result<JobResult> {

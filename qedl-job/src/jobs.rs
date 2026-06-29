@@ -582,11 +582,13 @@ impl Job for InfoJob {
             "Storage:       {}\n\
              Sector Size:   {} bytes\n\
              Total Sectors: {}\n\
-             Capacity:      {}",
+             Capacity:      {}\n\
+             Partitions:    {}",
             storage_type,
             sector_size,
             total_sectors,
-            humanize_size(total_sectors * sector_size as u64)
+            humanize_size(total_sectors * sector_size as u64),
+            ctx.all_partitions().len(),
         );
 
         for log_entry in &extra_logs {
