@@ -22,6 +22,36 @@ homepage = "https://github.com/baiyao105/qedl-rs"
 keywords = ["qualcomm", "qualcomm-edl", "sahara", "qualcomm-flash"]
 categories = ["embedded", "hardware-support"]
 
+[workspace.dependencies]
+thiserror = "2"
+color-eyre = "0.6"
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
+tracing-indicatif = "0.3"
+clap = { version = "4", features = ["derive"] }
+bytes = "1"
+chrono = "0.4"
+quick-xml = "0.37"
+indicatif = "0.17"
+# test utilities
+rstest = "0.18"
+pretty_assertions = "1"
+mockall = "0.12"
+tempfile = "3"
+insta = "1"
+test-log = "0.2"
+criterion = "0.5"
+
+qedl-core      = { path = "qedl-core" }
+qedl-transport = { path = "qedl-transport" }
+qedl-sahara    = { path = "qedl-sahara" }
+qedl-firehose  = { path = "qedl-firehose" }
+qedl-storage   = { path = "qedl-storage" }
+qedl-image     = { path = "qedl-image" }
+qedl-job       = { path = "qedl-job" }
+qedl           = { path = "qedl" }
+
 [profile.release]
 lto = true
 codegen-units = 1
@@ -29,24 +59,5 @@ opt-level = 3
 strip = true
 panic = "abort"
 
-[workspace.dependencies]
-qedl-core      = { path = "qedl-core", version = "0.1.0" }
-qedl-transport = { path = "qedl-transport", version = "0.1.0" }
-qedl-sahara    = { path = "qedl-sahara", version = "0.1.0" }
-qedl-firehose  = { path = "qedl-firehose", version = "0.1.0" }
-qedl-storage   = { path = "qedl-storage", version = "0.1.0" }
-qedl-image     = { path = "qedl-image", version = "0.1.0" }
-qedl-job       = { path = "qedl-job", version = "0.1.0" }
-qedl           = { path = "qedl", version = "0.1.0" }
-
-thiserror = "2"
-log = "0.4"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
-tracing-indicatif = "0.3"
-indicatif = "0.17"
-clap = { version = "4", features = ["derive"] }
-quick-xml = "0.37"
-color-eyre = "0.6"
-chrono = "0.4"
-bytes = "1"
+[profile.dev]
+# debug = true

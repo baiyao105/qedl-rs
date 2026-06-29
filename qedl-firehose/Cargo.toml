@@ -15,3 +15,7 @@ bytes.workspace = true
 quick-xml.workspace = true
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "time"] }
+
+[dev-dependencies]
+qedl-transport.workspace = true
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }

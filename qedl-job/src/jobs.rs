@@ -2,6 +2,7 @@ use crate::context::JobContext;
 use crate::error::Result;
 use async_trait::async_trait;
 use indicatif::{ProgressBar, ProgressStyle};
+#[cfg(feature = "sparse")]
 use md5::Digest;
 use std::io::Write;
 use std::path::PathBuf;

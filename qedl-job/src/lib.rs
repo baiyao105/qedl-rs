@@ -15,3 +15,5 @@ pub use jobs::{DumpJob, EraseJob, GptJob, InfoJob, Job, JobResult, RebootJob, Wr
 pub use jobs::{FlashJob, VerifyJob};
 pub use parser::{ParseError, RawEntry, RawProgram};
 pub use reader::ChunkedReader;
+
+pub mod testutil;

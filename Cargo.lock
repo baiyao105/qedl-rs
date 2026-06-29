@@ -802,9 +802,11 @@ dependencies = [
 name = "qedl-storage"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "qedl-core",
  "qedl-firehose",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 

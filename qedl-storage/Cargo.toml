@@ -11,3 +11,7 @@ qedl-core.workspace = true
 qedl-firehose.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+crc32fast = "1.4"
