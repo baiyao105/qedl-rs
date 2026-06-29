@@ -25,6 +25,7 @@ quick-xml.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tempfile.workspace = true
 
 [features]
 default = []

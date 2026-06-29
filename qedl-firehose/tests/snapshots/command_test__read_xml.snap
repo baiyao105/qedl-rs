@@ -1,0 +1,5 @@
+---
+source: qedl-firehose/tests/command_test.rs
+expression: cmd.to_xml()
+---
+<read SECTOR_SIZE_IN_BYTES="4096" num_partition_sectors="128" physical_partition_number="0" start_sector="64" />

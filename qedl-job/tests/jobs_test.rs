@@ -1,7 +1,7 @@
+use qedl_core::PartitionInfo;
 use qedl_job::jobs::*;
 use qedl_job::testutil::MockJobContext;
-use qedl_core::PartitionInfo;
-use std::path::PathBuf;
+use tempfile::TempDir;
 
 fn system_partition() -> PartitionInfo {
     PartitionInfo {
@@ -46,8 +46,7 @@ async fn test_info_job_name() {
 #[tokio::test]
 async fn test_gpt_job() {
     let mut ctx = MockJobContext::simple();
-    ctx.partitions
-        .insert("system".to_string(), system_partition());
+    ctx.partitions.insert("system".to_string(), system_partition());
     let job = GptJob;
     let result = job.execute(&mut ctx).await.unwrap();
     assert!(result.success);
@@ -76,35 +75,34 @@ async fn test_gpt_job_name() {
 #[tokio::test]
 async fn test_dump_job() {
     let mut ctx = MockJobContext::simple();
-    // Provide data: 1024 sectors * 512 bytes = 512KB
     let data = vec![0xABu8; 1024 * 512];
     ctx.push_read(bytes::Bytes::from(data));
 
-    let tmp = std::env::temp_dir().join("qedl_test_dump.bin");
-    let _ = std::fs::remove_file(&tmp);
+    let tmp = TempDir::new().unwrap();
+    let output = tmp.path().join("dump.bin");
 
     let job = DumpJob {
         partition_name: "boot".to_string(),
-        output_path: tmp.clone(),
+        output_path: output.clone(),
         show_progress: false,
         resume: false,
     };
     let result = job.execute(&mut ctx).await.unwrap();
     assert!(result.success);
     assert!(result.message.contains("dumped"));
-    assert!(result.steps_completed == 1);
+    assert_eq!(result.steps_completed, 1);
 
-    let metadata = std::fs::metadata(&tmp).unwrap();
+    let metadata = std::fs::metadata(&output).unwrap();
     assert_eq!(metadata.len(), 1024 * 512);
-    let _ = std::fs::remove_file(&tmp);
 }
 
 #[tokio::test]
 async fn test_dump_job_partition_not_found() {
     let mut ctx = MockJobContext::simple();
+    let tmp = TempDir::new().unwrap();
     let job = DumpJob {
         partition_name: "nonexistent".to_string(),
-        output_path: PathBuf::from("/tmp/test"),
+        output_path: tmp.path().join("test.bin"),
         show_progress: false,
         resume: false,
     };
@@ -115,30 +113,31 @@ async fn test_dump_job_partition_not_found() {
 #[tokio::test]
 async fn test_dump_job_resume_full() {
     let mut ctx = MockJobContext::simple();
-    let tmp = std::env::temp_dir().join("qedl_test_dump_resume.bin");
-    // Write a file that is >= total partition size
+    let tmp = TempDir::new().unwrap();
+    let output = tmp.path().join("dump_resume.bin");
+
     let total_bytes = 1024 * 512u64;
     let content = vec![0xABu8; total_bytes as usize];
-    std::fs::write(&tmp, &content).unwrap();
+    std::fs::write(&output, &content).unwrap();
 
     let job = DumpJob {
         partition_name: "boot".to_string(),
-        output_path: tmp.clone(),
+        output_path: output.clone(),
         show_progress: false,
         resume: true,
     };
     let result = job.execute(&mut ctx).await.unwrap();
     assert!(result.success);
     assert!(result.message.contains("already dumped"));
-    let _ = std::fs::remove_file(&tmp);
 }
 
 #[tokio::test]
 async fn test_dump_job_name() {
+    let tmp = TempDir::new().unwrap();
     assert_eq!(
         DumpJob {
             partition_name: "x".to_string(),
-            output_path: PathBuf::from("/tmp/x"),
+            output_path: tmp.path().join("x"),
             show_progress: false,
             resume: false,
         }
@@ -173,7 +172,13 @@ async fn test_erase_job_partition_not_found() {
 
 #[tokio::test]
 async fn test_erase_job_name() {
-    assert_eq!(EraseJob { partition_name: "x".to_string() }.name(), "erase");
+    assert_eq!(
+        EraseJob {
+            partition_name: "x".to_string()
+        }
+        .name(),
+        "erase"
+    );
 }
 
 // ── RebootJob ──
@@ -225,10 +230,7 @@ async fn test_xml_job_nak() {
 #[tokio::test]
 async fn test_xml_job_no_input() {
     let mut ctx = MockJobContext::simple();
-    let job = XmlJob {
-        xml: None,
-        file: None,
-    };
+    let job = XmlJob { xml: None, file: None };
     let result = job.execute(&mut ctx).await;
     assert!(result.is_err());
 }
@@ -238,16 +240,16 @@ async fn test_xml_job_from_file() {
     let mut ctx = MockJobContext::simple();
     ctx.push_xml_ack();
 
-    let tmp = std::env::temp_dir().join("qedl_test_xml.xml");
-    std::fs::write(&tmp, r#"<custom />"#).unwrap();
+    let tmp = TempDir::new().unwrap();
+    let xml_file = tmp.path().join("cmd.xml");
+    std::fs::write(&xml_file, r#"<custom />"#).unwrap();
 
     let job = XmlJob {
         xml: None,
-        file: Some(tmp.clone()),
+        file: Some(xml_file),
     };
     let result = job.execute(&mut ctx).await.unwrap();
     assert!(result.success);
-    let _ = std::fs::remove_file(&tmp);
 }
 
 #[tokio::test]
@@ -261,45 +263,45 @@ async fn test_xml_job_name() {
 async fn test_write_job() {
     let mut ctx = MockJobContext::simple();
 
-    // Create a small non-sparse image file (512 bytes = 1 sector)
-    let tmp = std::env::temp_dir().join("qedl_test_write.img");
+    let tmp = TempDir::new().unwrap();
+    let img = tmp.path().join("write.img");
     let content = vec![0x55u8; 512];
-    std::fs::write(&tmp, &content).unwrap();
+    std::fs::write(&img, &content).unwrap();
 
     let job = WriteJob {
         partition_name: "boot".to_string(),
-        image_path: tmp.clone(),
+        image_path: img,
     };
     let result = job.execute(&mut ctx).await.unwrap();
     assert!(result.success);
     assert!(result.message.contains("wrote"));
     assert_eq!(ctx.write_log.len(), 1);
-    assert_eq!(ctx.write_log[0].1, 0); // start_sector
-    assert_eq!(ctx.write_log[0].2, 1); // num_sectors
-    let _ = std::fs::remove_file(&tmp);
+    assert_eq!(ctx.write_log[0].1, 0);
+    assert_eq!(ctx.write_log[0].2, 1);
 }
 
 #[tokio::test]
 async fn test_write_job_partition_not_found() {
     let mut ctx = MockJobContext::simple();
-    let tmp = std::env::temp_dir().join("qedl_test_write2.img");
-    std::fs::write(&tmp, [0x55u8; 512]).unwrap();
+    let tmp = TempDir::new().unwrap();
+    let img = tmp.path().join("write2.img");
+    std::fs::write(&img, [0x55u8; 512]).unwrap();
 
     let job = WriteJob {
         partition_name: "nonexistent".to_string(),
-        image_path: tmp.clone(),
+        image_path: img,
     };
     let result = job.execute(&mut ctx).await;
     assert!(result.is_err());
-    let _ = std::fs::remove_file(&tmp);
 }
 
 #[tokio::test]
 async fn test_write_job_name() {
+    let tmp = TempDir::new().unwrap();
     assert_eq!(
         WriteJob {
             partition_name: "x".to_string(),
-            image_path: PathBuf::from("/tmp/x"),
+            image_path: tmp.path().join("x"),
         }
         .name(),
         "write"

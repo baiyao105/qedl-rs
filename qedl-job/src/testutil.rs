@@ -55,8 +55,10 @@ impl MockJobContext {
     }
 
     pub fn push_xml_ack(&mut self) {
-        self.xml_responses
-            .push(XmlResponse { is_ack: true, error_log: None });
+        self.xml_responses.push(XmlResponse {
+            is_ack: true,
+            error_log: None,
+        });
     }
 
     pub fn push_xml_nak(&mut self, reason: &str) {
@@ -140,9 +142,7 @@ impl JobContext for MockJobContext {
     async fn refresh_storage_info(&mut self) -> Result<Vec<String>> {
         match &self.storage_info_response {
             Some(Ok(logs)) => Ok(logs.clone()),
-            Some(Err(e)) => Err(crate::error::JobError::PreconditionFailed {
-                reason: e.clone(),
-            }),
+            Some(Err(e)) => Err(crate::error::JobError::PreconditionFailed { reason: e.clone() }),
             None => Ok(vec![]),
         }
     }

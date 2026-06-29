@@ -1,0 +1,5 @@
+---
+source: qedl-firehose/tests/command_test.rs
+expression: cmd.to_xml()
+---
+<erase SECTOR_SIZE_IN_BYTES="512" num_partition_sectors="16" physical_partition_number="0" start_sector="100" />

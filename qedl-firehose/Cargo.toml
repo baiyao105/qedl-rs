@@ -19,3 +19,5 @@ tokio = { version = "1", features = ["rt", "time"] }
 [dev-dependencies]
 qedl-transport.workspace = true
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+insta.workspace = true
+pretty_assertions.workspace = true

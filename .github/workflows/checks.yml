@@ -10,22 +10,16 @@ on:
     outputs:
       check_passed:
         description: "Whether all checks passed"
-        value: ${{ jobs.checks.outputs.check_passed }}
+        value: ${{ jobs.aggregate.outputs.check_passed }}
       skip_checks:
         description: "Whether to skip checks for release"
-        value: ${{ jobs.checks.outputs.skip_checks }}
+        value: ${{ jobs.skip-checks.outputs.skip_checks }}
 
 jobs:
-  checks:
-    runs-on: windows-latest
-    permissions:
-      contents: read
+  skip-checks:
+    runs-on: ubuntu-latest
     outputs:
-      check_passed: ${{ steps.aggregate.outputs.check_passed }}
-      skip_checks: ${{ steps.skip_checks.outputs.skip_checks }}
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
+      skip_checks: ${{ steps.check.outputs.skip_checks }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -33,7 +27,7 @@ jobs:
           fetch-depth: 0
 
       - name: Check for skip-checks
-        id: skip_checks
+        id: check
         shell: bash
         run: |
           if [[ '${{ inputs.is_release }}' != 'true' ]]; then
@@ -43,65 +37,91 @@ jobs:
           COMMIT_MSG=$(git log -1 --pretty=%B)
           if echo "$COMMIT_MSG" | grep -qi "skip-checks"; then
             echo "skip_checks=true" >> "$GITHUB_OUTPUT"
-            echo "### Skip checks found in commit message" >> "$GITHUB_STEP_SUMMARY"
-            ::group::skip_checks
-            echo "[DEBUG] Commit message: $COMMIT_MSG"
-            ::endgroup::
           else
             echo "skip_checks=false" >> "$GITHUB_OUTPUT"
-            ::group::skip_checks
-            echo "[DEBUG] Commit message: $COMMIT_MSG"
-            ::endgroup::
-            echo "### No skip-checks found in commit message" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+  fmt:
+    runs-on: ubuntu-latest
+    needs: skip-checks
+    if: needs.skip-checks.outputs.skip_checks != 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          cache-targets: false
+          components: rustfmt
+      - run: cargo fmt --all --check
 
-      - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+  clippy:
+    runs-on: ubuntu-latest
+    needs: skip-checks
+    if: needs.skip-checks.outputs.skip_checks != 'true'
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: cargo fmt
-        id: fmt
-        run: cargo fmt --all --check
-        continue-on-error: true
+  test:
+    runs-on: ubuntu-latest
+    needs: skip-checks
+    if: needs.skip-checks.outputs.skip_checks != 'true'
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --all
 
-      - name: cargo clippy
-        id: clippy
-        run: cargo clippy --all-targets -- -D warnings
-        continue-on-error: true
+  msrv:
+    runs-on: ubuntu-latest
+    needs: skip-checks
+    if: needs.skip-checks.outputs.skip_checks != 'true'
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-hack
+      - run: cargo hack check --workspace --feature-powerset --exclude-features default
 
-      - name: cargo test
-        id: test
-        run: cargo test --all
-        continue-on-error: true
-
-      - name: Aggregate result
-        id: aggregate
-        if: always()
+  aggregate:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [fmt, clippy, test, msrv]
+    outputs:
+      check_passed: ${{ steps.result.outputs.check_passed }}
+    steps:
+      - name: Aggregate results
+        id: result
         shell: bash
         run: |
-          FMT_OUTCOME="${{ steps.fmt.outcome }}"
-          CLIPPY_OUTCOME="${{ steps.clippy.outcome }}"
-          TEST_OUTCOME="${{ steps.test.outcome }}"
-          if [ "$FMT_OUTCOME" = "success" ] && [ "$CLIPPY_OUTCOME" = "success" ] && [ "$TEST_OUTCOME" = "success" ]; then
+          echo "fmt: ${{ needs.fmt.result }}"
+          echo "clippy: ${{ needs.clippy.result }}"
+          echo "test: ${{ needs.test.result }}"
+          echo "msrv: ${{ needs.msrv.result }}"
+          if [ "${{ needs.fmt.result }}" = "success" ] && \
+             [ "${{ needs.clippy.result }}" = "success" ] && \
+             [ "${{ needs.test.result }}" = "success" ] && \
+             [ "${{ needs.msrv.result }}" = "success" ]; then
             echo "check_passed=true" >> "$GITHUB_OUTPUT"
-            echo "### All checks passed" >> "$GITHUB_STEP_SUMMARY"
-            echo "- fmt: $FMT_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
-            echo "- clippy: $CLIPPY_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
-            echo "- test: $TEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "check_passed=false" >> "$GITHUB_OUTPUT"
-            echo "### Some checks failed" >> "$GITHUB_STEP_SUMMARY"
-            echo "- fmt: $FMT_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
-            echo "- clippy: $CLIPPY_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
-            echo "- test: $TEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
