@@ -9,7 +9,7 @@ on:
       tag:
         required: false
         type: string
-        default: ''
+        default: ""
 
 jobs:
   release:
@@ -122,7 +122,6 @@ jobs:
             ${{ steps.sha256.outputs.files_info }}
           files: |
             release-artifacts/*
-            ${{ steps.attest.outputs.bundle-path }}
 
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth

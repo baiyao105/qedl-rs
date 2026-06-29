@@ -2,8 +2,8 @@ name: Build
 
 on:
   push:
-    branches: ['master']
-    tags: ['v*']
+    branches: ["master"]
+    tags: ["v*"]
     paths-ignore:
       - "**/*.md"
       - "**/*.txt"
@@ -14,7 +14,7 @@ on:
       - ".github/DISCUSSION_TEMPLATE/**"
       - ".github/PULL_REQUEST_TEMPLATE*"
   pull_request:
-    branches: ['master']
+    branches: ["master"]
     paths-ignore:
       - "**/*.md"
       - "**/*.txt"
@@ -27,12 +27,12 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: 'Create a release'
+        description: "Create a release"
         required: false
         type: boolean
         default: false
       tag:
-        description: 'Release tag (e.g., v1.0.0)'
+        description: "Release tag (e.g., v1.0.0)"
         required: false
         type: string
 
