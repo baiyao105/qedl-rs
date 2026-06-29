@@ -563,10 +563,10 @@ async fn read_gpt_for_lun(
     let lba1_data = firehose.read_sectors(transport, lun, 1, 1).await?;
     tracing::debug!("Read {} bytes from LBA 1", lba1_data.len());
 
-    let gpt = match GptTable::parse(&lba1_data, &[], lun, sector_size) {
+    let (gpt, header_source) = match GptTable::parse(&lba1_data, &[], lun, sector_size) {
         Ok(g) => {
             tracing::debug!("LUN {}: Primary GPT header valid", lun);
-            g
+            (g, lba1_data.clone())
         }
         Err(e) => {
             tracing::warn!(
@@ -580,8 +580,9 @@ async fn read_gpt_for_lun(
             }
             let backup_lba = total_sectors - 1;
             tracing::debug!("Reading Backup GPT header at LBA {}", backup_lba);
-            let backup_data = firehose.read_sectors(transport, lun, backup_lba, 1).await?;
-            GptTable::parse(&backup_data, &[], lun, sector_size)?
+            let backup_header = firehose.read_sectors(transport, lun, backup_lba, 1).await?;
+            let g = GptTable::parse(&backup_header, &[], lun, sector_size)?;
+            (g, backup_header)
         }
     };
 
@@ -600,7 +601,7 @@ async fn read_gpt_for_lun(
         );
         let entries_data = firehose.read_sectors(transport, lun, entry_lba, entry_sectors).await?;
         tracing::debug!("Read {} bytes of GPT entries", entries_data.len());
-        let gpt = GptTable::parse(&lba1_data, &entries_data, lun, sector_size)?;
+        let gpt = GptTable::parse(&header_source, &entries_data, lun, sector_size)?;
 
         if total_sectors > 0 {
             let backup_lba = total_sectors - 1;

@@ -275,16 +275,16 @@ impl QedlClientBuilder {
 
     /// Builds and returns the configured `QedlClient`.
     pub fn build(self) -> QedlClient {
-        let config = ExecutorConfig::builder()
-            .port(self.port.unwrap_or_default())
-            .serial(self.serial.unwrap_or_default())
-            .loader(self.loader.unwrap_or_default())
-            .timeout(self.timeout)
-            .dry_run(self.dry_run)
-            .verbose(self.verbose)
-            .max_retries(self.max_retries)
-            .event_sink(self.event_sink.unwrap_or_else(|| Arc::new(qedl_core::NoopEventSink)))
-            .build();
+        let config = ExecutorConfig {
+            port: self.port,
+            serial: self.serial,
+            loader: self.loader,
+            timeout: self.timeout,
+            dry_run: self.dry_run,
+            verbose: self.verbose,
+            max_retries: self.max_retries,
+            event_sink: self.event_sink,
+        };
 
         QedlClient::from_config(config)
     }

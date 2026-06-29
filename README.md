@@ -24,9 +24,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = QedlClient::builder()
         .port("COM3")
         .loader("prog_firehose.mbn")
-        .build()?;
+        .build();
 
-    client.initialize().await?;
+    client.init().await?;
 
     // List partitions
     for p in client.partitions() {

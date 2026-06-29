@@ -5,13 +5,30 @@ use std::path::Path;
 use std::process::Command;
 
 fn run_command(cmd: &str, args: &[&str]) -> Option<String> {
-    Command::new(cmd).args(args).output().ok().and_then(|output| {
-        if output.status.success() {
-            String::from_utf8(output.stdout).ok().map(|s| s.trim().to_string())
-        } else {
-            None
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let exit = match child.wait() {
+        Ok(e) => e,
+        Err(_) => {
+            let _ = child.kill();
+            return None;
         }
-    })
+    };
+
+    if !exit.success() {
+        return None;
+    }
+
+    let mut stdout = child.stdout.take()?;
+    let mut buf = String::new();
+    use std::io::Read;
+    let _ = stdout.read_to_string(&mut buf).ok()?;
+    Some(buf.trim().to_string())
 }
 
 fn write_const(file: &mut File, name: &str, value: &str) {

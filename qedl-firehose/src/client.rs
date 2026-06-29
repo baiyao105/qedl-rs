@@ -335,10 +335,14 @@ impl FirehoseClient {
             FirehoseResponse::from_xml(&final_resp_xml).map_err(|e| FirehoseError::InvalidResponse { reason: e })?;
 
         if !final_resp.is_ack() {
-            tracing::warn!(
+            tracing::error!(
                 error = ?final_resp.error_log,
                 "Firehose read: completion response was NAK"
             );
+            return Err(FirehoseError::Nak {
+                command: "read".to_string(),
+                reason: final_resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+            });
         } else {
             tracing::trace!("Firehose read: completion response ACK received");
         }
@@ -401,10 +405,14 @@ impl FirehoseClient {
         let final_resp =
             FirehoseResponse::from_xml(&final_resp_xml).map_err(|e| FirehoseError::InvalidResponse { reason: e })?;
         if !final_resp.is_ack() {
-            tracing::warn!(
+            tracing::error!(
                 error = ?final_resp.error_log,
                 "Firehose program: completion response was NAK"
             );
+            return Err(FirehoseError::Nak {
+                command: "program".to_string(),
+                reason: final_resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+            });
         }
 
         let elapsed = start_time.elapsed().as_secs_f64();
