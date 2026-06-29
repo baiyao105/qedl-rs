@@ -208,6 +208,7 @@ pub struct QedlClientBuilder {
     verbose: bool,
     max_retries: u32,
     event_sink: Option<Arc<dyn qedl_core::EventSink>>,
+    auto_edl_switch: bool,
 }
 
 impl QedlClientBuilder {
@@ -222,6 +223,7 @@ impl QedlClientBuilder {
             verbose: false,
             max_retries: 3,
             event_sink: None,
+            auto_edl_switch: true,
         }
     }
 
@@ -273,6 +275,12 @@ impl QedlClientBuilder {
         self
     }
 
+    /// Enables or disables automatic DIAG to EDL (9008) mode switching.
+    pub fn auto_edl_switch(mut self, switch: bool) -> Self {
+        self.auto_edl_switch = switch;
+        self
+    }
+
     /// Builds and returns the configured `QedlClient`.
     pub fn build(self) -> QedlClient {
         let config = ExecutorConfig {
@@ -284,6 +292,7 @@ impl QedlClientBuilder {
             verbose: self.verbose,
             max_retries: self.max_retries,
             event_sink: self.event_sink,
+            auto_edl_switch: self.auto_edl_switch,
         };
 
         QedlClient::from_config(config)

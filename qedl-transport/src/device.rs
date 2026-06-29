@@ -1,14 +1,85 @@
 use crate::error::Result;
+use qedl_core::DeviceMode;
 use std::time::Duration;
 
 pub use qedl_core::DeviceInfo;
 
 pub const QUALCOMM_VID: u16 = 0x05C6;
 pub const QUALCOMM_9008_PID: u16 = 0x9008;
-pub const QUALCOMM_90B8_PID: u16 = 0x90B8;
 
 fn serialport_error_to_io(e: serialport::Error) -> std::io::Error {
     std::io::Error::other(e.to_string())
+}
+
+/// Query the USB interface descriptors for a device to determine its operating mode.
+///
+/// Qualcomm USB devices expose different interface class/subclass/protocol combos:
+/// - EDL (firehose): class=0xFF, subclass=0xFF, protocol=0xFF
+/// - DIAG:           class=0xFF, subclass=0xFF, protocol≠0xFF
+///
+/// Falls back to `DeviceMode::Unknown` if the device cannot be found or queried.
+fn query_device_mode(vid: u16, pid: u16) -> DeviceMode {
+    let devices = match rusb::DeviceList::new() {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::trace!("rusb: failed to enumerate devices: {}", e);
+            return DeviceMode::Unknown;
+        }
+    };
+
+    for device in devices.iter() {
+        let desc = match device.device_descriptor() {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if desc.vendor_id() != vid || desc.product_id() != pid {
+            continue;
+        }
+
+        let config = match device.active_config_descriptor() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::trace!(
+                    "rusb: failed to read config descriptor for {:04X}:{:04X}: {}",
+                    vid,
+                    pid,
+                    e
+                );
+                return DeviceMode::Unknown;
+            }
+        };
+
+        for iface in config.interfaces() {
+            for iface_desc in iface.descriptors() {
+                let class = iface_desc.class_code();
+                let subclass = iface_desc.sub_class_code();
+                let protocol = iface_desc.protocol_code();
+
+                tracing::trace!(
+                    "rusb: {:04X}:{:04X} interface {} class={:02X} subclass={:02X} protocol={:02X}",
+                    vid,
+                    pid,
+                    iface_desc.interface_number(),
+                    class,
+                    subclass,
+                    protocol
+                );
+
+                if class == 0xFF && subclass == 0xFF {
+                    return if protocol == 0xFF {
+                        DeviceMode::Edl
+                    } else {
+                        DeviceMode::Diag
+                    };
+                }
+            }
+        }
+
+        tracing::trace!("rusb: {:04X}:{:04X} has no vendor-specific (0xFF) interface", vid, pid);
+        return DeviceMode::Unknown;
+    }
+
+    DeviceMode::Unknown
 }
 
 pub struct DeviceEnumerator;
@@ -31,19 +102,15 @@ impl DeviceEnumerator {
             if vid != QUALCOMM_VID {
                 continue;
             }
-            if pid != QUALCOMM_9008_PID && pid != QUALCOMM_90B8_PID {
-                continue;
-            }
 
-            let product_default = if pid == QUALCOMM_9008_PID {
-                "Qualcomm 9008"
-            } else {
-                "Qualcomm 90B8"
-            };
+            let mode = query_device_mode(vid, pid);
+
             let description = match &port.port_type {
-                serialport::SerialPortType::UsbPort(info) => {
-                    Some(info.product.as_deref().unwrap_or(product_default).to_string())
-                }
+                serialport::SerialPortType::UsbPort(info) => Some(info.product.clone().unwrap_or_else(|| match mode {
+                    DeviceMode::Edl => "Qualcomm 9008 (EDL)".to_string(),
+                    DeviceMode::Diag => "Qualcomm DIAG".to_string(),
+                    DeviceMode::Unknown => "Qualcomm".to_string(),
+                })),
                 _ => None,
             };
             let serial = match &port.port_type {
@@ -57,8 +124,9 @@ impl DeviceEnumerator {
                 vid,
                 pid,
                 description,
+                mode,
             };
-            tracing::debug!("Found Qualcomm device: {} (PID=0x{:04X})", info, pid);
+            tracing::debug!("Found Qualcomm device: {} (PID=0x{:04X}, mode={:?})", info, pid, mode);
             devices.push(info);
         }
         tracing::debug!("Scan complete: {} Qualcomm device(s) found", devices.len());
@@ -79,13 +147,21 @@ impl DeviceEnumerator {
                 ),
                 _ => (None, None, None, None),
             };
+            let v = vid.unwrap_or(0);
+            let p = pid.unwrap_or(0);
+            let mode = if v == QUALCOMM_VID {
+                query_device_mode(v, p)
+            } else {
+                DeviceMode::Unknown
+            };
             devices.push(DeviceInfo {
                 port: port.port_name.clone(),
                 serial,
                 product: description.clone(),
-                vid: vid.unwrap_or(0),
-                pid: pid.unwrap_or(0),
+                vid: v,
+                pid: p,
                 description,
+                mode,
             });
         }
         Ok(devices)
@@ -93,25 +169,33 @@ impl DeviceEnumerator {
 
     pub fn auto_select() -> Result<DeviceInfo> {
         let devices = Self::list()?;
-        let has_9008 = devices.iter().any(|d| d.pid == QUALCOMM_9008_PID);
-        let filtered: Vec<DeviceInfo> = if has_9008 {
-            devices.into_iter().filter(|d| d.pid == QUALCOMM_9008_PID).collect()
-        } else {
-            devices
-        };
 
-        match filtered.len() {
+        // Prefer EDL over DIAG to avoid unnecessary mode switch
+        let edl: Vec<_> = devices.iter().filter(|d| d.is_9008()).collect();
+        if !edl.is_empty() {
+            if edl.len() == 1 {
+                let device = edl.into_iter().next().unwrap().clone();
+                tracing::debug!("Auto-selected EDL device: {}", device);
+                return Ok(device);
+            } else {
+                tracing::debug!("Multiple EDL devices found ({})", edl.len());
+                return Err(crate::error::TransportError::MultipleFound { count: edl.len() });
+            }
+        }
+
+        let diag: Vec<_> = devices.into_iter().filter(|d| d.is_diag()).collect();
+        match diag.len() {
             0 => {
-                tracing::debug!("No 9008/90B8 device found via auto-select");
+                tracing::debug!("No Qualcomm device found via auto-select");
                 Err(crate::error::TransportError::NotFound)
             }
             1 => {
-                let device = filtered.into_iter().next().expect("filtered list is non-empty");
-                tracing::debug!("Auto-selected device: {}", device);
+                let device = diag.into_iter().next().unwrap();
+                tracing::debug!("Auto-selected DIAG device: {}", device);
                 Ok(device)
             }
             n => {
-                tracing::debug!("Multiple devices found ({}) via auto-select", n);
+                tracing::debug!("Multiple DIAG devices found ({})", n);
                 Err(crate::error::TransportError::MultipleFound { count: n })
             }
         }
@@ -144,13 +228,13 @@ impl DeviceEnumerator {
             Some(s) => format!("{}s", s),
             None => "forever".to_string(),
         };
-        tracing::info!("Waiting for 9008/90B8 device (timeout: {})...", timeout_desc);
+        tracing::info!("Waiting for 9008/DIAG device (timeout: {})...", timeout_desc);
         loop {
             let devices = Self::list_all()?;
             let matched = devices.into_iter().find(|d| {
                 let port_ok = port.is_none_or(|p| d.port == p);
                 let serial_ok = serial.is_none_or(|s| d.serial.as_deref() == Some(s));
-                let qualcomm = d.vid == QUALCOMM_VID && (d.pid == QUALCOMM_9008_PID || d.pid == QUALCOMM_90B8_PID);
+                let qualcomm = d.vid == QUALCOMM_VID && (d.pid == QUALCOMM_9008_PID || d.is_diag());
                 port_ok && serial_ok && qualcomm
             });
 
@@ -175,11 +259,11 @@ impl DeviceEnumerator {
         }
     }
 
-    /// Switch a 90B8 (DIAG mode) device to 9008 (EDL mode).
+    /// Switch a DIAG mode device to 9008 (EDL mode).
     /// Opens the DIAG serial port, sends the EDL mode switch command,
     /// then waits for the device to re-enumerate as 9008.
-    pub fn switch_90b8_to_9008(port_name: &str, timeout_secs: u64) -> Result<()> {
-        tracing::info!("Switching 90B8 DIAG device on {} to 9008 EDL mode...", port_name);
+    pub fn switch_diag_to_edl(port_name: &str, timeout_secs: u64) -> Result<()> {
+        tracing::info!("Switching DIAG device on {} to 9008 EDL mode...", port_name);
 
         let mut port = match serialport::new(port_name, 115200)
             .data_bits(serialport::DataBits::Eight)
@@ -190,24 +274,20 @@ impl DeviceEnumerator {
             .open()
         {
             Ok(p) => {
-                tracing::debug!("Opened 90B8 port {}", port_name);
+                tracing::debug!("Opened DIAG port {}", port_name);
                 p
             }
             Err(e) => {
-                tracing::warn!("Failed to open 90B8 port {}: {}", port_name, e);
+                tracing::warn!("Failed to open DIAG port {}: {}", port_name, e);
                 return Err(crate::error::TransportError::Io(std::io::Error::other(e.to_string())));
             }
         };
 
-        // Send EDL mode switch magic sequences
-        // Common magics used by Qualcomm DIAG->EDL switch:
+        // API: Qualcomm DIAG->EDL switch magic sequences (device-specific, order matters)
         let magics: &[&[u8]] = &[
-            // Magic 1: Standard Sahara Hello (triggers EDL entry on some 90B8 devices)
-            &[0x7E, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7E],
-            // Magic 2: DIAG EDL command (\x75 = EDL mode cmd)
-            &[0x75, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-            // Magic 3: DLOAD mode switch
-            &[0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            &[0x7E, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7E], // Sahara Hello
+            &[0x75, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],       // DIAG EDL cmd
+            &[0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],       // DLOAD switch
         ];
 
         for (i, magic) in magics.iter().enumerate() {
@@ -218,7 +298,7 @@ impl DeviceEnumerator {
         }
 
         drop(port);
-        tracing::info!("90B8 port closed, waiting for device to re-enumerate as 9008...");
+        tracing::info!("DIAG port closed, waiting for device to re-enumerate as 9008...");
 
         let start = std::time::Instant::now();
         loop {

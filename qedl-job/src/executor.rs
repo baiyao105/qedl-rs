@@ -24,6 +24,7 @@ pub struct ExecutorConfig {
     pub verbose: bool,
     pub max_retries: u32,
     pub event_sink: Option<Arc<dyn EventSink>>,
+    pub auto_edl_switch: bool,
 }
 
 impl Default for ExecutorConfig {
@@ -37,6 +38,7 @@ impl Default for ExecutorConfig {
             verbose: false,
             max_retries: 3,
             event_sink: None,
+            auto_edl_switch: true,
         }
     }
 }
@@ -52,6 +54,7 @@ impl std::fmt::Debug for ExecutorConfig {
             .field("verbose", &self.verbose)
             .field("max_retries", &self.max_retries)
             .field("event_sink", &self.event_sink.as_ref().map(|_| "<EventSink>"))
+            .field("auto_edl_switch", &self.auto_edl_switch)
             .finish()
     }
 }
@@ -71,6 +74,7 @@ pub struct ExecutorConfigBuilder {
     verbose: bool,
     max_retries: u32,
     event_sink: Option<Arc<dyn EventSink>>,
+    auto_edl_switch: bool,
 }
 
 impl ExecutorConfigBuilder {
@@ -84,6 +88,7 @@ impl ExecutorConfigBuilder {
             verbose: false,
             max_retries: 3,
             event_sink: None,
+            auto_edl_switch: true,
         }
     }
 
@@ -127,6 +132,11 @@ impl ExecutorConfigBuilder {
         self
     }
 
+    pub fn auto_edl_switch(mut self, switch: bool) -> Self {
+        self.auto_edl_switch = switch;
+        self
+    }
+
     pub fn build(self) -> ExecutorConfig {
         ExecutorConfig {
             port: self.port,
@@ -137,6 +147,7 @@ impl ExecutorConfigBuilder {
             verbose: self.verbose,
             max_retries: self.max_retries,
             event_sink: self.event_sink,
+            auto_edl_switch: self.auto_edl_switch,
         }
     }
 }
@@ -185,23 +196,44 @@ impl JobExecutor {
             tracing::info!("Searching for device by serial: {}", serial);
             DeviceEnumerator::find_by_serial(serial)?
         } else {
-            tracing::info!("Auto-detecting 9008/90B8 device");
+            tracing::info!("Auto-detecting 9008/DIAG device");
             DeviceEnumerator::auto_select()?
         };
 
         tracing::info!("Device found: {} (PID=0x{:04X})", device, device.pid);
 
-        if device.is_90b8() {
-            tracing::warn!("Device is in DIAG mode (90B8), switching to EDL mode (9008)...");
-            DeviceEnumerator::switch_90b8_to_9008(&device.port, self.config.timeout.as_secs())?;
-            tracing::info!("90B8 -> 9008 switch successful, re-scanning...");
+        if device.is_diag() {
+            if !self.config.auto_edl_switch {
+                tracing::info!("Device is in DIAG mode, skipping (--no-switch-edl)");
+                return Err(crate::error::JobError::PreconditionFailed {
+                    reason: "device is in DIAG mode, --no-switch-edl is set".to_string(),
+                });
+            }
+            tracing::warn!("Device is in DIAG mode, switching to EDL mode (9008)...");
+            DeviceEnumerator::switch_diag_to_edl(&device.port, self.config.timeout.as_secs())?;
+            tracing::info!("DIAG -> EDL switch successful, re-scanning...");
             let device = if let Some(ref port) = self.config.port {
                 DeviceEnumerator::find_by_port(port)?
             } else {
                 DeviceEnumerator::auto_select()?
             };
             tracing::info!("Device after switch: {} (PID=0x{:04X})", device, device.pid);
+            let switched_port = device.port.clone();
             self.device = Some(device);
+            self.state = DeviceState::Connected;
+            self.session = Some(Session::new(
+                qedl_core::DeviceInfo {
+                    port: switched_port,
+                    serial: None,
+                    product: None,
+                    pid: 0x9008,
+                    vid: 0x05C6,
+                    description: None,
+                    mode: qedl_core::DeviceMode::Edl,
+                },
+                qedl_core::DeviceCapabilities::default(),
+                qedl_core::FirehoseInfo::default(),
+            ));
             return Ok(());
         }
 
@@ -215,6 +247,7 @@ impl JobExecutor {
                 pid: 0x9008,
                 vid: 0x05C6,
                 description: None,
+                mode: qedl_core::DeviceMode::Edl,
             },
             qedl_core::DeviceCapabilities::default(),
             qedl_core::FirehoseInfo::default(),

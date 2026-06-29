@@ -12,6 +12,17 @@ impl PartitionInfo {
     }
 }
 
+/// Qualcomm USB device operating mode, determined from interface descriptors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceMode {
+    /// Firehose/Sahara mode (bInterfaceClass=0xFF, SubClass=0xFF, Protocol=0xFF)
+    Edl,
+    /// DIAG mode (bInterfaceClass=0xFF, SubClass=0xFF, Protocol≠0xFF)
+    Diag,
+    /// Could not determine from USB descriptors; fall back to PID heuristic
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
     /// Serial port name (e.g., "COM3", "/dev/ttyUSB0")
@@ -22,15 +33,34 @@ pub struct DeviceInfo {
     /// USB Vendor ID (always 0x05C6 for Qualcomm)
     pub vid: u16,
     pub description: Option<String>,
+    /// Device mode determined from USB interface descriptors
+    pub mode: DeviceMode,
 }
+
+/// Known Qualcomm DIAG mode PIDs (fallback when interface descriptor unavailable).
+pub const DIAG_PIDS: &[u16] = &[0x90B8, 0x9091, 0x90E8];
 
 impl DeviceInfo {
     pub fn is_9008(&self) -> bool {
-        self.vid == 0x05C6 && self.pid == 0x9008
+        match self.mode {
+            DeviceMode::Edl => true,
+            DeviceMode::Unknown => self.vid == 0x05C6 && self.pid == 0x9008,
+            _ => false,
+        }
     }
 
     pub fn is_90b8(&self) -> bool {
         self.vid == 0x05C6 && self.pid == 0x90B8
+    }
+
+    /// Returns true if this device is in any Qualcomm DIAG mode.
+    /// Uses interface descriptor when available, falls back to PID heuristic.
+    pub fn is_diag(&self) -> bool {
+        match self.mode {
+            DeviceMode::Diag => true,
+            DeviceMode::Unknown => self.vid == 0x05C6 && DIAG_PIDS.contains(&self.pid),
+            _ => false,
+        }
     }
 }
 

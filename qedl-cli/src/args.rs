@@ -52,6 +52,10 @@ pub struct GlobalArgs {
         value_name = "SECS"
     )]
     pub wait_device: Option<u64>,
+
+    /// 禁止自动从 DIAG 模式切换到 EDL 模式 (9008)
+    #[arg(long, global = true)]
+    pub no_switch_edl: bool,
 }
 
 #[derive(Subcommand, Debug)]

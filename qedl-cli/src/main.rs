@@ -45,6 +45,7 @@ async fn main() -> color_eyre::Result<()> {
         verbose: cli.global.verbose > 0,
         max_retries: 3,
         event_sink: None,
+        auto_edl_switch: !cli.global.no_switch_edl,
     };
 
     if let Some(wait_secs) = cli.global.wait_device {

@@ -1,4 +1,4 @@
-use qedl_core::{DeviceCapabilities, PartitionInfo};
+use qedl_core::{DeviceCapabilities, DeviceMode, PartitionInfo};
 
 #[tokio::test]
 async fn test_partition_size() {
@@ -46,6 +46,7 @@ async fn test_device_info_display() {
         pid: 0x9008,
         vid: 0x05C6,
         description: None,
+        mode: DeviceMode::Edl,
     };
     assert_eq!(format!("{}", info), "COM3");
 }
