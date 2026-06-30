@@ -225,7 +225,7 @@ impl QedlClientBuilder {
             port: None,
             serial: None,
             loader: None,
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(45),
             dry_run: false,
             verbose: false,
             max_retries: 3,

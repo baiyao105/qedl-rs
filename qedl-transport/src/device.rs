@@ -1,5 +1,6 @@
 use crate::error::Result;
 use qedl_core::DeviceMode;
+use std::collections::HashMap;
 use std::time::Duration;
 
 pub use qedl_core::DeviceInfo;
@@ -9,6 +10,59 @@ pub const QUALCOMM_9008_PID: u16 = 0x9008;
 
 fn serialport_error_to_io(e: serialport::Error) -> std::io::Error {
     std::io::Error::other(e.to_string())
+}
+
+/// CRC-16/CCITT (polynomial 0x11021, init 0xFFFF, xorOut 0xFFFF).
+/// Used by Qualcomm DIAG HDLC framing.
+fn crc16_ccitt(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0xFFFF;
+    for &byte in data {
+        crc ^= u16::from(byte);
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0x8408;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    crc ^ 0xFFFF
+}
+
+/// Escape payload for HDLC: 0x7E → 0x7D 0x5E, 0x7D → 0x7D 0x5D
+fn hdlc_escape(payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(payload.len() + 16);
+    for &b in payload {
+        match b {
+            0x7E => {
+                out.push(0x7D);
+                out.push(0x5E);
+            }
+            0x7D => {
+                out.push(0x7D);
+                out.push(0x5D);
+            }
+            _ => out.push(b),
+        }
+    }
+    out
+}
+
+/// Build an HDLC-framed DIAG packet: 0x7E [escaped{cmd + payload + CRC16}] 0x7E
+fn diag_frame(cmd: u8, payload: &[u8]) -> Vec<u8> {
+    let mut data = Vec::with_capacity(1 + payload.len() + 2);
+    data.push(cmd);
+    data.extend_from_slice(payload);
+    let crc = crc16_ccitt(&data);
+    data.push((crc & 0xFF) as u8);
+    data.push((crc >> 8) as u8);
+
+    let escaped = hdlc_escape(&data);
+    let mut frame = Vec::with_capacity(2 + escaped.len());
+    frame.push(0x7E);
+    frame.extend_from_slice(&escaped);
+    frame.push(0x7E);
+    frame
 }
 
 /// Query the USB interface descriptors for a device to determine its operating mode.
@@ -167,35 +221,81 @@ impl DeviceEnumerator {
         Ok(devices)
     }
 
+    /// Group devices by serial number. Devices with the same serial are
+    /// different COM ports on the same physical Qualcomm composite device.
+    fn group_by_serial(devices: Vec<DeviceInfo>) -> Vec<Vec<DeviceInfo>> {
+        let mut map: HashMap<Option<String>, Vec<DeviceInfo>> = HashMap::new();
+        for d in devices {
+            map.entry(d.serial.clone()).or_default().push(d);
+        }
+        map.into_values().collect()
+    }
+
+    /// Pick the best DIAG port from a multi-port group.
+    /// MDM may not support mode switching.
+    fn select_diag_port(group: &[DeviceInfo]) -> DeviceInfo {
+        let preferred = ["MSM Diagnostics", "Diagnostics", "MDM Diagnostics"];
+        for name in &preferred {
+            if let Some(d) = group.iter().find(|d| {
+                d.description
+                    .as_deref()
+                    .is_some_and(|desc| desc.contains(name))
+            }) {
+                return d.clone();
+            }
+        }
+        group.first().unwrap().clone()
+    }
+
     pub fn auto_select() -> Result<DeviceInfo> {
         let devices = Self::list()?;
 
         // Prefer EDL over DIAG to avoid unnecessary mode switch
-        let edl: Vec<_> = devices.iter().filter(|d| d.is_9008()).collect();
-        if !edl.is_empty() {
-            if edl.len() == 1 {
-                let device = edl.into_iter().next().unwrap().clone();
-                tracing::debug!("Auto-selected EDL device: {}", device);
-                return Ok(device);
-            } else {
-                tracing::debug!("Multiple EDL devices found ({})", edl.len());
-                return Err(crate::error::TransportError::MultipleFound { count: edl.len() });
-            }
+        let edl_groups: Vec<_> = devices
+            .iter()
+            .filter(|d| d.is_9008())
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .fold(Vec::<DeviceInfo>::new(), |mut acc, d| {
+                if acc.iter().any(|e| e.serial == d.serial) {
+                    return acc;
+                }
+                acc.push(d);
+                acc
+            });
+
+        let edl_count = edl_groups.len();
+        if edl_count == 1 {
+            let device = edl_groups.into_iter().next().unwrap();
+            tracing::debug!("Auto-selected EDL device: {}", device);
+            return Ok(device);
+        } else if edl_count > 1 {
+            tracing::debug!("Multiple EDL devices found ({})", edl_count);
+            return Err(crate::error::TransportError::MultipleFound { count: edl_count });
         }
 
+        // Group DIAG devices by serial (multi-port composite devices)
         let diag: Vec<_> = devices.into_iter().filter(|d| d.is_diag()).collect();
-        match diag.len() {
+        let groups = Self::group_by_serial(diag);
+
+        match groups.len() {
             0 => {
                 tracing::debug!("No Qualcomm device found via auto-select");
                 Err(crate::error::TransportError::NotFound)
             }
             1 => {
-                let device = diag.into_iter().next().unwrap();
-                tracing::debug!("Auto-selected DIAG device: {}", device);
+                let group = groups.into_iter().next().unwrap();
+                let device = Self::select_diag_port(&group);
+                tracing::debug!(
+                    "Auto-selected DIAG device: {} (from {} port(s))",
+                    device,
+                    group.len()
+                );
                 Ok(device)
             }
             n => {
-                tracing::debug!("Multiple DIAG devices found ({})", n);
+                tracing::debug!("Multiple independent DIAG devices found ({})", n);
                 Err(crate::error::TransportError::MultipleFound { count: n })
             }
         }
@@ -260,50 +360,71 @@ impl DeviceEnumerator {
     }
 
     /// Switch a DIAG mode device to 9008 (EDL mode).
-    /// Opens the DIAG serial port, sends the EDL mode switch command,
+    /// Sends the DIAG subsystem command to enter Sahara/EDL mode,
     /// then waits for the device to re-enumerate as 9008.
+    /// Tries both 115200 and 921600 baud rates.
     pub fn switch_diag_to_edl(port_name: &str, timeout_secs: u64) -> Result<()> {
         tracing::info!("Switching DIAG device on {} to 9008 EDL mode...", port_name);
 
-        let mut port = match serialport::new(port_name, 115200)
-            .data_bits(serialport::DataBits::Eight)
-            .stop_bits(serialport::StopBits::One)
-            .parity(serialport::Parity::None)
-            .flow_control(serialport::FlowControl::None)
-            .timeout(std::time::Duration::from_millis(1000))
-            .open()
-        {
-            Ok(p) => {
-                tracing::debug!("Opened DIAG port {}", port_name);
-                p
-            }
-            Err(e) => {
-                tracing::warn!("Failed to open DIAG port {}: {}", port_name, e);
-                return Err(crate::error::TransportError::Io(std::io::Error::other(e.to_string())));
-            }
-        };
+        let baud_rates = [115200u32, 921600];
 
-        // API: Qualcomm DIAG->EDL switch magic sequences (device-specific, order matters)
-        let magics: &[&[u8]] = &[
-            &[0x7E, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7E], // Sahara Hello
-            &[0x75, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],       // DIAG EDL cmd
-            &[0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],       // DLOAD switch
-        ];
+        let mut sent = false;
+        for &baud in &baud_rates {
+            tracing::debug!("Trying baud rate {} on {}", baud, port_name);
+            let mut port = match serialport::new(port_name, baud)
+                .data_bits(serialport::DataBits::Eight)
+                .stop_bits(serialport::StopBits::One)
+                .parity(serialport::Parity::None)
+                .flow_control(serialport::FlowControl::None)
+                .timeout(std::time::Duration::from_millis(2000))
+                .open()
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::debug!("Failed to open {} at {}: {}", port_name, baud, e);
+                    continue;
+                }
+            };
 
-        for (i, magic) in magics.iter().enumerate() {
-            tracing::debug!("Sending EDL switch magic #{}: {:02X?}", i + 1, magic);
-            let _ = port.write(magic);
-            let _ = port.flush();
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            // DIAG_SUBSYS_CMD_F (0x4B) + Sahara subsystem (0x65) + switch cmd (0x01 LE)
+            let frame = diag_frame(0x4B, &[0x65, 0x01, 0x00]);
+            tracing::debug!("Sending DIAG EDL switch command ({} baud): {:02X?}", baud, frame);
+            if port.write_all(&frame).is_err() || port.flush().is_err() {
+                tracing::debug!("Failed to write at {} baud", baud);
+                continue;
+            }
+
+            // Read and discard the response
+            let mut buf = [0u8; 256];
+            match port.read(&mut buf) {
+                Ok(n) => {
+                    tracing::debug!("DIAG response ({} bytes): {:02X?}", n, &buf[..n]);
+                }
+                Err(e) => {
+                    tracing::debug!("No DIAG response at {}: {}", baud, e);
+                }
+            }
+
+            sent = true;
+            drop(port);
+            break;
         }
 
-        drop(port);
+        if !sent {
+            tracing::warn!("Failed to open DIAG port at any baud rate");
+            return Err(crate::error::TransportError::Io(std::io::Error::other(
+                "failed to open DIAG port at any baud rate",
+            )));
+        }
+
         tracing::info!("DIAG port closed, waiting for device to re-enumerate as 9008...");
+
+        let skipped_port = port_name.to_string();
 
         let start = std::time::Instant::now();
         loop {
             let devices = Self::list()?;
-            if devices.iter().any(|d| d.is_9008()) {
+            if devices.iter().any(|d| d.is_9008() && d.port != skipped_port) {
                 tracing::info!(
                     "Device re-enumerated as 9008 after {:.1}s",
                     start.elapsed().as_secs_f64()

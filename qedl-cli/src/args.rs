@@ -34,7 +34,7 @@ pub struct GlobalArgs {
     pub loader: Option<PathBuf>,
 
     /// 串口超时时间（毫秒）
-    #[arg(long, global = true, default_value = "30000", value_name = "MS")]
+    #[arg(long, global = true, default_value = "45000", value_name = "MS")]
     pub timeout: u64,
 
     #[arg(long, global = true)]
