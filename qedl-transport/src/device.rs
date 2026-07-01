@@ -236,11 +236,10 @@ impl DeviceEnumerator {
     fn select_diag_port(group: &[DeviceInfo]) -> DeviceInfo {
         let preferred = ["MSM Diagnostics", "Diagnostics", "MDM Diagnostics"];
         for name in &preferred {
-            if let Some(d) = group.iter().find(|d| {
-                d.description
-                    .as_deref()
-                    .is_some_and(|desc| desc.contains(name))
-            }) {
+            if let Some(d) = group
+                .iter()
+                .find(|d| d.description.as_deref().is_some_and(|desc| desc.contains(name)))
+            {
                 return d.clone();
             }
         }
@@ -287,11 +286,7 @@ impl DeviceEnumerator {
             1 => {
                 let group = groups.into_iter().next().unwrap();
                 let device = Self::select_diag_port(&group);
-                tracing::debug!(
-                    "Auto-selected DIAG device: {} (from {} port(s))",
-                    device,
-                    group.len()
-                );
+                tracing::debug!("Auto-selected DIAG device: {} (from {} port(s))", device, group.len());
                 Ok(device)
             }
             n => {
