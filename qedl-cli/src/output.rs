@@ -1,45 +1,54 @@
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use indicatif::ProgressStyle;
 use owo_colors::OwoColorize;
-use std::io::Write;
+use std::sync::Arc;
+use tokio::sync::Notify;
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 const DIVIDER: &str = "────────────────────────────────────────";
 
 /// A simple spinner for showing temporary progress during device operations.
-/// Writes to stdout to avoid conflicts with tracing (which writes to stderr).
-/// The spinner auto-clears when dropped, so logs remain unaffected.
+/// Uses tracing-indicatif's span-based progress so the IndicatifLayer coordinates
+/// spinner redraws with log output on stderr, preventing residual text artifacts.
 pub struct Spinner {
-    pb: ProgressBar,
+    notify: Arc<Notify>,
 }
 
 impl Spinner {
-    /// Create a new spinner with a message, writing to stdout
+    /// Create a new spinner with a message, coordinated with tracing via IndicatifLayer
     pub fn new(message: &str) -> Self {
-        // Write to stdout so it doesn't conflict with tracing on stderr
-        let pb = ProgressBar::with_draw_target(None, ProgressDrawTarget::stdout_with_hz(120));
-        pb.set_style(
-            ProgressStyle::with_template("{spinner:.cyan} {msg}")
+        let span = tracing::info_span!("spinner");
+        span.pb_set_style(
+            &ProgressStyle::with_template("{spinner:.cyan} {msg}")
                 .unwrap()
                 .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
         );
-        pb.set_message(message.to_string());
-        pb.enable_steady_tick(std::time::Duration::from_millis(80));
-        Self { pb }
+        span.pb_set_message(message);
+
+        let notify = Arc::new(Notify::new());
+        let notify_clone = notify.clone();
+
+        // Spawn a task that keeps the span entered so the progress bar stays visible.
+        // The IndicatifLayer clears/redraws this progress bar around log messages.
+        tokio::spawn(async move {
+            let _guard = span.enter();
+            notify_clone.notified().await;
+            // When notified, _guard is dropped, exiting the span.
+            // The IndicatifLayer finishes the progress bar automatically.
+        });
+
+        Self { notify }
     }
 }
 
 impl qedl::SpinnerHandle for Spinner {
     fn finish(&self) {
-        self.pb.finish_and_clear();
-        let _ = std::io::stdout().flush();
+        self.notify.notify_one();
     }
 }
 
 impl Drop for Spinner {
     fn drop(&mut self) {
-        if !self.pb.is_finished() {
-            self.pb.finish_and_clear();
-            let _ = std::io::stdout().flush();
-        }
+        self.notify.notify_one();
     }
 }
 
