@@ -3,7 +3,7 @@
 use crate::error::{Result, SaharaError};
 use crate::protocol::*;
 use bytes::Bytes;
-use qedl_core::{Event, EventSink, SaharaEvent, emit_event};
+use qedl_core::{Event, EventSink, SaharaEvent, emit_event, hex_dump};
 use qedl_transport::Transport;
 use std::path::Path;
 use std::sync::Arc;
@@ -137,8 +137,8 @@ impl<T: Transport> SaharaSession<T> {
                         buf[0]
                     );
                     tracing::warn!(
-                        "[Sahara] Raw: {:02X?} TXT: {}",
-                        &buf[..32],
+                        "[Sahara] Raw:\n{}TXT: {}",
+                        hex_dump(&buf[..32], 32),
                         String::from_utf8_lossy(&buf[..32])
                     );
                     return Err(SaharaError::AlreadyInFirehose);
@@ -440,10 +440,10 @@ impl<T: Transport> SaharaSession<T> {
                 reason: format!("failed to parse done response: {}", e),
             })?);
             tracing::info!(
-                "[Sahara] Done response: {} bytes, first_cmd=0x{:02X}, raw={:02X?}",
+                "[Sahara] Done response: {} bytes, first_cmd=0x{:02X}:\n{}",
                 n,
                 cmd,
-                &rsp_buf[..n]
+                hex_dump(&rsp_buf[..n], 64)
             );
         } else {
             tracing::warn!("[Sahara] No Done response received");

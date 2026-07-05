@@ -1,3 +1,5 @@
+use humansize::{DECIMAL, format_size};
+
 #[derive(Debug, Clone)]
 pub struct PartitionInfo {
     pub name: String,
@@ -101,15 +103,7 @@ impl DeviceCapabilities {
 
     pub fn total_size_human(&self, sector_size: u32) -> String {
         let bytes = self.total_size_bytes(sector_size);
-        if bytes >= 1024 * 1024 * 1024 {
-            format!("{:.1} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
-        } else if bytes >= 1024 * 1024 {
-            format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
-        } else if bytes >= 1024 {
-            format!("{:.1} KB", bytes as f64 / 1024.0)
-        } else {
-            format!("{} B", bytes)
-        }
+        format_size(bytes, DECIMAL)
     }
 }
 

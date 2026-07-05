@@ -1,5 +1,5 @@
 use crate::error::Result;
-use qedl_core::DeviceMode;
+use qedl_core::{DeviceMode, hex_dump};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -383,7 +383,11 @@ impl DeviceEnumerator {
 
             // DIAG_SUBSYS_CMD_F (0x4B) + Sahara subsystem (0x65) + switch cmd (0x01 LE)
             let frame = diag_frame(0x4B, &[0x65, 0x01, 0x00]);
-            tracing::debug!("Sending DIAG EDL switch command ({} baud): {:02X?}", baud, frame);
+            tracing::debug!(
+                "Sending DIAG EDL switch command ({} baud):\n{}",
+                baud,
+                hex_dump(&frame, 64)
+            );
             if port.write_all(&frame).is_err() || port.flush().is_err() {
                 tracing::debug!("Failed to write at {} baud", baud);
                 continue;
@@ -393,7 +397,7 @@ impl DeviceEnumerator {
             let mut buf = [0u8; 256];
             match port.read(&mut buf) {
                 Ok(n) => {
-                    tracing::debug!("DIAG response ({} bytes): {:02X?}", n, &buf[..n]);
+                    tracing::debug!("DIAG response ({} bytes):\n{}", n, hex_dump(&buf[..n], 64));
                 }
                 Err(e) => {
                     tracing::debug!("No DIAG response at {}: {}", baud, e);

@@ -2,7 +2,7 @@ use crate::command::FirehoseCommand;
 use crate::error::{FirehoseError, Result};
 use crate::response::FirehoseResponse;
 use bytes::{Bytes, BytesMut};
-use qedl_core::{Event, EventSink, FirehoseEvent, emit_event};
+use qedl_core::{Event, EventSink, FirehoseEvent, emit_event, hex_dump};
 use qedl_transport::Transport;
 use std::sync::Arc;
 use std::time::Duration;
@@ -500,7 +500,7 @@ impl FirehoseClient {
                 }
                 Ok(n) => {
                     got_data = true;
-                    tracing::warn!("[Firehose] Drain got {} bytes: {:02X?}", n, &buf[..n]);
+                    tracing::warn!("[Firehose] Drain got {} bytes:\n{}", n, hex_dump(&buf[..n], 128));
                     tracing::warn!("[Firehose] Drain TXT: {}", String::from_utf8_lossy(&buf[..n]));
                     let text = String::from_utf8_lossy(&buf[..n]);
                     if text.contains("<response ") || text.contains("</data>") {
@@ -524,7 +524,7 @@ impl FirehoseClient {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     total += n;
-                    tracing::warn!("[Firehose] Drain extra {} bytes: {:02X?}", n, &buf[..n]);
+                    tracing::warn!("[Firehose] Drain extra {} bytes:\n{}", n, hex_dump(&buf[..n], 128));
                     tracing::warn!("[Firehose] Drain TXT: {}", String::from_utf8_lossy(&buf[..n]));
                     let text = String::from_utf8_lossy(&buf[..n]);
                     if text.contains("<response ") || text.contains("</data>") {

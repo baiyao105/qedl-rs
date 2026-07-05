@@ -16,6 +16,7 @@ gui = []
 [dependencies]
 thiserror.workspace = true
 quick-xml.workspace = true
+humansize.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
