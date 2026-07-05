@@ -190,13 +190,13 @@ impl JobExecutor {
 
     pub fn connect(&mut self) -> Result<()> {
         let device = if let Some(ref port) = self.config.port {
-            tracing::info!("Searching for device by port: {}", port);
+            tracing::debug!("Searching for device by port: {}", port);
             DeviceEnumerator::find_by_port(port)?
         } else if let Some(ref serial) = self.config.serial {
-            tracing::info!("Searching for device by serial: {}", serial);
+            tracing::debug!("Searching for device by serial: {}", serial);
             DeviceEnumerator::find_by_serial(serial)?
         } else {
-            tracing::info!("Auto-detecting 9008/DIAG device");
+            tracing::debug!("Auto-detecting 9008/DIAG device");
             DeviceEnumerator::auto_select()?
         };
 
@@ -204,14 +204,14 @@ impl JobExecutor {
 
         if device.is_diag() {
             if !self.config.auto_edl_switch {
-                tracing::info!("Device is in DIAG mode, skipping (--no-switch-edl)");
+                tracing::info!("Device in DIAG mode, skipping (--no-switch-edl)");
                 return Err(crate::error::JobError::PreconditionFailed {
                     reason: "device is in DIAG mode, --no-switch-edl is set".to_string(),
                 });
             }
-            tracing::warn!("Device is in DIAG mode, switching to EDL mode (9008)...");
+            tracing::info!("Device in DIAG mode, switching to EDL (9008)");
             DeviceEnumerator::switch_diag_to_edl(&device.port, self.config.timeout.as_secs())?;
-            tracing::info!("DIAG -> EDL switch successful, re-scanning...");
+            tracing::info!("DIAG -> EDL switch successful");
             let device = if let Some(ref port) = self.config.port {
                 DeviceEnumerator::find_by_port(port)?
             } else {
@@ -281,18 +281,17 @@ impl JobExecutor {
                 reason: "not connected".to_string(),
             })?;
 
-        tracing::info!("Opening serial port {} at 115200 baud", device.port);
+        tracing::info!("Opening serial port {}", device.port);
         let transport = SerialTransport::open(&device.port, 115200, self.config.timeout)?;
 
-        tracing::info!("Starting Sahara handshake with loader: {:?}", loader_path);
+        tracing::info!("Starting Sahara handshake");
         let sahara = SaharaSession::new(transport).with_event_sink(self.config.event_sink.clone());
         match sahara
             .handshake(loader_path, qedl_sahara::SaharaMode::ImageTransfer)
             .await
         {
             Ok((transport, sahara_info)) => {
-                tracing::info!("Sahara handshake complete, device in Firehose mode");
-                // Store Sahara device info in session
+                tracing::info!("Sahara handshake complete");
                 if let Some(ref mut session) = self.session {
                     session.msm_hw_id = sahara_info.msm_hw_id;
                     session.serial_num = sahara_info.serial_num;
@@ -316,31 +315,34 @@ impl JobExecutor {
 
         self.firehose.drain_initial_messages(transport.as_mut()).await?;
 
-        tracing::info!("Sending Firehose configure");
+        tracing::info!("Configuring Firehose");
         self.firehose.configure(transport.as_mut()).await?;
-        tracing::info!("Firehose configured successfully");
+        tracing::info!(
+            "Firehose configured (Target={} Memory={})",
+            self.firehose.target_name,
+            self.firehose.memory_name
+        );
 
-        tracing::info!("Querying storage info");
+        tracing::debug!("Querying storage info");
         match self.firehose.get_storage_info(transport.as_mut()).await {
             Ok(storage_resp) => {
                 if let Some(name) = &storage_resp.memory_name {
-                    tracing::info!("Detected storage type: {}", name);
+                    tracing::debug!("Storage type: {}", name);
                 }
                 if let Some(ss) = storage_resp.sector_size {
-                    tracing::info!("Updating sector size: {} -> {}", self.firehose.sector_size, ss);
+                    tracing::debug!("Sector size: {} bytes", ss);
                     self.firehose.sector_size = ss;
                 }
                 if let Some(ts) = storage_resp.total_sectors {
-                    tracing::info!("Total sectors: {}", ts);
+                    tracing::debug!("Total sectors: {}", ts);
                     self.firehose.total_sectors = ts;
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "getstorageinfo failed (NAK?), continuing anyway");
+                tracing::debug!(error = %e, "getstorageinfo failed, continuing");
             }
         }
 
-        // Write back real Firehose info to session
         if let Some(ref mut session) = self.session {
             session.firehose.sector_size = self.firehose.sector_size;
             session.firehose.max_payload_size = self.firehose.max_payload_size;
@@ -357,7 +359,7 @@ impl JobExecutor {
     }
 
     pub async fn load_gpt(&mut self) -> Result<()> {
-        tracing::info!("Loading GPT partition table from device");
+        tracing::info!("Reading GPT partition table");
         let transport = self
             .transport
             .as_mut()
@@ -369,16 +371,16 @@ impl JobExecutor {
         let total_sectors = self.firehose.total_sectors;
 
         let max_lun = if self.firehose.memory_name.to_lowercase().contains("ufs") {
-            tracing::info!("Detected UFS storage, scanning LUNs 0-3");
+            tracing::debug!("UFS storage detected, scanning LUNs 0-3");
             4u8
         } else {
-            tracing::info!("Detected eMMC storage, scanning LUN 0 only");
+            tracing::debug!("eMMC storage detected, scanning LUN 0 only");
             1u8
         };
 
         let luns: Vec<u8> = (0..max_lun).collect();
         for &lun in &luns {
-            tracing::info!("Reading GPT from LUN {}", lun);
+            tracing::debug!("Reading GPT from LUN {}", lun);
             match read_gpt_for_lun(transport.as_mut(), &mut self.firehose, lun, sector_size, total_sectors).await {
                 Ok(table) => {
                     if self.firehose.total_sectors == 0
@@ -386,18 +388,14 @@ impl JobExecutor {
                         && let Some(hdr) = &table.header
                     {
                         let calculated_total = hdr.backup_lba + 1;
-                        tracing::info!(
-                            "Using GPT backup_lba to calculate total sectors: {} (from backup_lba {})",
-                            calculated_total,
-                            hdr.backup_lba
-                        );
+                        tracing::debug!("Using GPT backup_lba for total sectors: {}", calculated_total);
                         self.firehose.total_sectors = calculated_total;
                     }
 
                     let count = table.entries.len();
                     for entry in &table.entries {
                         let clean_name = entry.name.trim().trim_matches('\0').trim();
-                        tracing::debug!(
+                        tracing::trace!(
                             "Partition: name='{}', LBA={}..{}, LUN={}",
                             clean_name,
                             entry.first_lba,
@@ -406,14 +404,13 @@ impl JobExecutor {
                         );
                     }
                     self.partitions.add_table(table);
-                    tracing::info!("LUN {}: {} partitions loaded", lun, count);
+                    tracing::debug!("LUN {}: {} partitions loaded", lun, count);
                 }
                 Err(e) => {
-                    tracing::debug!(error = %e, "LUN: no valid GPT found");
+                    tracing::trace!(error = %e, "LUN {}: no valid GPT", lun);
                     if lun == 0 {
                         return Err(e);
                     }
-                    tracing::info!("LUN {}: no GPT, skipping to next", lun);
                     continue;
                 }
             }
@@ -431,11 +428,7 @@ impl JobExecutor {
             })
             .collect();
 
-        tracing::info!(
-            "GPT loading complete: {} partitions across {} LUNs",
-            self.partitions.total_partitions(),
-            self.partitions.luns().len()
-        );
+        tracing::info!("Found {} partitions", self.partitions.total_partitions());
         Ok(())
     }
 
@@ -513,21 +506,20 @@ impl JobExecutor {
                 reason: "not connected".to_string(),
             })?;
 
-        tracing::info!("Opening serial port {} at 115200 baud", device.port);
+        tracing::info!("Opening serial port {}", device.port);
         let transport = SerialTransport::open(&device.port, 115200, self.config.timeout)?;
 
-        // Try Firehose configure directly — device may already be in Firehose mode
         let mut boxed: Box<dyn Transport> = Box::new(transport);
         tracing::info!("Attempting direct Firehose configure (skip Sahara)");
         self.firehose.drain_initial_messages(boxed.as_mut()).await?;
         match self.firehose.configure(boxed.as_mut()).await {
             Ok(()) => {
-                tracing::info!("Device responded to Firehose configure — already in Firehose mode");
+                tracing::info!("Device already in Firehose mode");
                 self.transport = Some(boxed);
                 self.state = DeviceState::Ready;
             }
             Err(e) => {
-                tracing::info!("Direct configure failed ({}), falling back to Sahara handshake", e);
+                tracing::info!("Direct configure failed ({}), trying Sahara handshake", e);
                 drop(boxed);
                 self.handshake().await?;
                 self.init_firehose().await?;
@@ -535,7 +527,7 @@ impl JobExecutor {
             }
         }
 
-        tracing::info!("Querying storage info");
+        tracing::debug!("Querying storage info");
         match self
             .firehose
             .get_storage_info(self.transport.as_mut().unwrap().as_mut())
@@ -543,15 +535,16 @@ impl JobExecutor {
         {
             Ok(storage_resp) => {
                 if let Some(name) = &storage_resp.memory_name {
-                    tracing::info!("Detected storage type: {}", name);
+                    tracing::debug!("Storage type: {}", name);
                 }
                 if let Some(ss) = storage_resp.sector_size {
+                    tracing::debug!("Sector size: {} bytes", ss);
                     self.firehose.sector_size = ss;
                 }
                 if let Some(ts) = storage_resp.total_sectors {
+                    tracing::debug!("Total sectors: {}", ts);
                     self.firehose.total_sectors = ts;
                 }
-                // Update session with real Firehose info
                 if let Some(ref mut session) = self.session {
                     session.firehose.sector_size = self.firehose.sector_size;
                     session.firehose.max_payload_size = self.firehose.max_payload_size;
@@ -560,7 +553,7 @@ impl JobExecutor {
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "getstorageinfo failed, continuing");
+                tracing::debug!(error = %e, "getstorageinfo failed, continuing");
             }
         }
 
@@ -648,7 +641,7 @@ impl JobContext for JobExecutor {
         let resp = self.firehose.raw_xml(transport.as_mut(), xml).await?;
         Ok(XmlResponse {
             is_ack: resp.is_ack(),
-            error_log: resp.error_log,
+            error: resp.error,
         })
     }
 
@@ -707,27 +700,22 @@ async fn read_gpt_for_lun(
     sector_size: u32,
     total_sectors: u64,
 ) -> Result<GptTable> {
-    tracing::debug!("Reading LBA 1 (GPT header) from LUN {}...", lun);
+    tracing::trace!("Reading GPT header from LUN {} LBA 1", lun);
     let lba1_data = firehose.read_sectors(transport, lun, 1, 1).await?;
-    tracing::debug!("Read {} bytes from LBA 1", lba1_data.len());
 
     let (gpt, header_source) = match GptTable::parse(&lba1_data, &[], lun, sector_size) {
         Ok(g) => {
-            tracing::debug!("LUN {}: Primary GPT header valid", lun);
+            tracing::trace!("LUN {}: Primary GPT header valid", lun);
             (g, lba1_data.clone())
         }
         Err(e) => {
-            tracing::warn!(
-                "LUN {}: Primary GPT header invalid ({}), falling back to Backup GPT...",
-                lun,
-                e
-            );
+            tracing::trace!("LUN {}: Primary GPT invalid ({}), trying backup", lun, e);
             if total_sectors == 0 {
-                tracing::error!("LUN {}: cannot fall back to Backup GPT (total_sectors=0)", lun);
+                tracing::debug!("LUN {}: cannot use backup GPT (total_sectors=0)", lun);
                 return Err(e.into());
             }
             let backup_lba = total_sectors - 1;
-            tracing::debug!("Reading Backup GPT header at LBA {}", backup_lba);
+            tracing::trace!("Reading backup GPT header at LBA {}", backup_lba);
             let backup_header = firehose.read_sectors(transport, lun, backup_lba, 1).await?;
             let g = GptTable::parse(&backup_header, &[], lun, sector_size)?;
             (g, backup_header)
@@ -741,20 +729,17 @@ async fn read_gpt_for_lun(
     let entry_lba = gpt.header.as_ref().map_or(2, |h| h.partition_entry_start_lba);
 
     if entry_sectors > 0 {
-        tracing::debug!(
-            "Reading {} GPT partition entries at LBA {} ({} sectors)...",
+        tracing::trace!(
+            "Reading {} GPT entries at LBA {}",
             gpt.header.as_ref().map_or(0, |h| h.num_partition_entries),
-            entry_lba,
-            entry_sectors
+            entry_lba
         );
         let entries_data = firehose.read_sectors(transport, lun, entry_lba, entry_sectors).await?;
-        tracing::debug!("Read {} bytes of GPT entries", entries_data.len());
         let gpt = GptTable::parse(&header_source, &entries_data, lun, sector_size)?;
 
         if total_sectors > 0 {
             let backup_lba = total_sectors - 1;
             let backup_entries_lba = backup_lba - entry_sectors;
-            tracing::debug!("Verifying Backup GPT entries at LBA {}...", backup_entries_lba);
             match firehose
                 .read_sectors(transport, lun, backup_entries_lba, entry_sectors)
                 .await
@@ -762,25 +747,18 @@ async fn read_gpt_for_lun(
                 Ok(backup_entries) => {
                     let backup_valid = !backup_entries.is_empty() && backup_entries.len() == entries_data.len();
                     if !backup_valid {
-                        tracing::warn!("LUN {}: Backup GPT entries mismatch", lun);
-                    } else {
-                        tracing::debug!("LUN {}: Backup GPT entries verified OK", lun);
+                        tracing::trace!("LUN {}: Backup GPT entries mismatch", lun);
                     }
                 }
                 Err(e) => {
-                    tracing::debug!("LUN {}: could not verify Backup GPT: {}", lun, e);
+                    tracing::trace!("LUN {}: backup GPT verification failed: {}", lun, e);
                 }
             }
         }
 
-        tracing::info!(
-            "LUN {}: GPT loaded ({} entries)",
-            lun,
-            gpt.header.as_ref().map_or(0, |h| h.num_partition_entries)
-        );
         return Ok(gpt);
     }
 
-    tracing::warn!("LUN {}: GPT header present but entries count is 0", lun);
+    tracing::debug!("LUN {}: GPT header present but entries count is 0", lun);
     Ok(gpt)
 }

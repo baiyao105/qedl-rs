@@ -13,7 +13,7 @@ fn test_parse_nak() {
     let xml = r#"<response value="NAK"><log value="Sector not found" /></response>"#;
     let resp = FirehoseResponse::from_xml(xml).unwrap();
     assert!(resp.is_nak());
-    assert_eq!(resp.error_log.as_deref(), Some("Sector not found"));
+    assert_eq!(resp.error.as_deref(), Some("Sector not found"));
 }
 
 #[test]

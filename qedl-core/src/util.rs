@@ -1,5 +1,6 @@
 use humansize::{DECIMAL, format_size};
 use quick_xml::events::BytesStart;
+use sha2::{Digest, Sha256};
 
 pub fn get_attr(e: &BytesStart, name: &str) -> Option<String> {
     e.try_get_attribute(name)
@@ -19,6 +20,20 @@ pub fn get_attr_u64(e: &BytesStart, name: &str) -> Option<u64> {
 
 pub fn humanize_size(bytes: u64) -> String {
     format_size(bytes, DECIMAL)
+}
+
+/// Compute SHA-256 hash of data and return first 8 bytes as hex string.
+pub fn sha256_short(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    hex::encode(&result[..8])
+}
+
+/// Brief binary representation: `512B sha256:abcd1234`
+/// Used for TRACE level logging of binary data without dumping raw bytes.
+pub fn brief_binary(data: &[u8]) -> String {
+    format!("{} sha256:{}", humanize_size(data.len() as u64), sha256_short(data))
 }
 
 pub fn hex_dump(data: &[u8], max_bytes: usize) -> String {

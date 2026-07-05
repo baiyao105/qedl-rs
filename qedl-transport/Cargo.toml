@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 description = "USB/serial transport abstraction for Qualcomm EDL communication"
 
+[features]
+default = []
+trace-transport = []
+
 [dependencies]
 qedl-core.workspace = true
 thiserror.workspace = true

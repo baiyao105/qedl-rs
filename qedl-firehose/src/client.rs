@@ -2,7 +2,7 @@ use crate::command::FirehoseCommand;
 use crate::error::{FirehoseError, Result};
 use crate::response::FirehoseResponse;
 use bytes::{Bytes, BytesMut};
-use qedl_core::{Event, EventSink, FirehoseEvent, emit_event, hex_dump};
+use qedl_core::{Event, EventSink, FirehoseEvent, emit_event};
 use qedl_transport::Transport;
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,7 +68,7 @@ impl FirehoseClient {
         let resp = self.execute_command(transport, &cmd).await?;
         if !resp.is_ack() {
             return Err(FirehoseError::ConfigureFailed {
-                reason: resp.error_log.unwrap_or_else(|| "unknown error".to_string()),
+                reason: resp.error.unwrap_or_else(|| "unknown error".to_string()),
             });
         }
 
@@ -108,8 +108,10 @@ impl FirehoseClient {
             self.memory_name,
             self.sector_size,
             self.max_payload_size,
-            self.max_payload_size_from_target.map_or("N/A".to_string(), |v| v.to_string()),
-            self.max_payload_size_to_target_supported.map_or("N/A".to_string(), |v| v.to_string()),
+            self.max_payload_size_from_target
+                .map_or("N/A".to_string(), |v| v.to_string()),
+            self.max_payload_size_to_target_supported
+                .map_or("N/A".to_string(), |v| v.to_string()),
             self.max_xml_size.map_or("N/A".to_string(), |v| v.to_string()),
             self.version.as_deref().unwrap_or("N/A"),
         );
@@ -121,28 +123,37 @@ impl FirehoseClient {
         transport: &mut dyn Transport,
         command: &FirehoseCommand,
     ) -> Result<FirehoseResponse> {
+        let cmd_name = command.name();
         let inner = command.to_xml();
         let xml = format!(r#"<?xml version="1.0" encoding="UTF-8" ?><data>{}</data>"#, inner);
-        tracing::trace!(xml = %xml, "Sending Firehose command");
+
+        // Semantic trace: only command name (TRACE level)
+        tracing::trace!("Firehose -> {}", cmd_name);
+
+        // Full XML dump only with trace-xml feature (TRACE level)
+        #[cfg(feature = "trace-xml")]
+        tracing::trace!(xml = %xml, "Firehose XML sent");
 
         let _ = transport.flush().await;
         transport.write(xml.as_bytes()).await?;
 
         let response_xml = self.read_response(transport).await?;
-        tracing::trace!(xml = %response_xml, "Received Firehose response");
+
+        // Full XML dump only with trace-xml feature (TRACE level)
+        #[cfg(feature = "trace-xml")]
+        tracing::trace!(xml = %response_xml, "Firehose XML received");
 
         let resp =
             FirehoseResponse::from_xml(&response_xml).map_err(|e| FirehoseError::InvalidResponse { reason: e })?;
 
+        // Log semantic trace: ACK/NAK
+        tracing::trace!("Firehose <- {}", if resp.is_ack() { "ACK" } else { "NAK" });
+
+        // Log device logs at trace level
         for log_msg in &resp.logs {
-            tracing::trace!(target: "qedl_firehose::device", "{}", log_msg);
+            tracing::trace!("Firehose log: {}", log_msg);
         }
 
-        tracing::trace!(
-            ack = resp.is_ack(),
-            error = ?resp.error_log,
-            "Parsed Firehose response"
-        );
         Ok(resp)
     }
 
@@ -289,13 +300,10 @@ impl FirehoseClient {
 
         let resp = self.execute_command(transport, &cmd).await?;
         if !resp.is_ack() {
-            tracing::error!(
-                error = resp.error_log.as_deref().unwrap_or("unknown"),
-                "Firehose read NAK"
-            );
+            tracing::error!(error = resp.error.as_deref().unwrap_or("unknown"), "Firehose read NAK");
             return Err(FirehoseError::Nak {
                 command: "read".to_string(),
-                reason: resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+                reason: resp.error.unwrap_or_else(|| "unknown".to_string()),
             });
         }
 
@@ -363,12 +371,12 @@ impl FirehoseClient {
 
         if !final_resp.is_ack() {
             tracing::error!(
-                error = ?final_resp.error_log,
+                error = ?final_resp.error,
                 "Firehose read: completion response was NAK"
             );
             return Err(FirehoseError::Nak {
                 command: "read".to_string(),
-                reason: final_resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+                reason: final_resp.error.unwrap_or_else(|| "unknown".to_string()),
             });
         } else {
             tracing::trace!("Firehose read: completion response ACK received");
@@ -417,12 +425,12 @@ impl FirehoseClient {
         let resp = self.execute_command(transport, &cmd).await?;
         if !resp.is_ack() {
             tracing::error!(
-                error = resp.error_log.as_deref().unwrap_or("unknown"),
+                error = resp.error.as_deref().unwrap_or("unknown"),
                 "Firehose program NAK"
             );
             return Err(FirehoseError::Nak {
                 command: "program".to_string(),
-                reason: resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+                reason: resp.error.unwrap_or_else(|| "unknown".to_string()),
             });
         }
 
@@ -433,12 +441,12 @@ impl FirehoseClient {
             FirehoseResponse::from_xml(&final_resp_xml).map_err(|e| FirehoseError::InvalidResponse { reason: e })?;
         if !final_resp.is_ack() {
             tracing::error!(
-                error = ?final_resp.error_log,
+                error = ?final_resp.error,
                 "Firehose program: completion response was NAK"
             );
             return Err(FirehoseError::Nak {
                 command: "program".to_string(),
-                reason: final_resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+                reason: final_resp.error.unwrap_or_else(|| "unknown".to_string()),
             });
         }
 
@@ -476,10 +484,10 @@ impl FirehoseClient {
 
         let resp = self.execute_command(transport, &cmd).await?;
         if !resp.is_ack() {
-            tracing::error!("Firehose erase NAK: {}", resp.error_log.as_deref().unwrap_or("unknown"));
+            tracing::error!("Firehose erase NAK: {}", resp.error.as_deref().unwrap_or("unknown"));
             return Err(FirehoseError::Nak {
                 command: "erase".to_string(),
-                reason: resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+                reason: resp.error.unwrap_or_else(|| "unknown".to_string()),
             });
         }
 
@@ -499,7 +507,7 @@ impl FirehoseClient {
         if !resp.is_ack() {
             return Err(FirehoseError::Nak {
                 command: "reboot".to_string(),
-                reason: resp.error_log.unwrap_or_else(|| "unknown".to_string()),
+                reason: resp.error.unwrap_or_else(|| "unknown".to_string()),
             });
         }
         Ok(())
@@ -513,55 +521,55 @@ impl FirehoseClient {
     /// Drain the device's initialization messages after Sahara handshake.
     /// Waits up to 3s for the Firehose loader to boot, then drains any init messages.
     pub async fn drain_initial_messages(&mut self, transport: &mut dyn Transport) -> Result<()> {
-        tracing::info!("[Firehose] Waiting for device to enter Firehose mode...");
+        tracing::debug!("Waiting for Firehose mode...");
         transport.set_timeout(Duration::from_millis(500));
 
-        // Wait for first data (loader boot may take time)
         let buf = &mut self.read_buf;
         let mut got_data = false;
+        let mut total = 0usize;
+
         for attempt in 0..6 {
             match transport.read(buf).await {
                 Ok(0) | Err(_) => {
-                    tracing::trace!("[Firehose] Waiting for loader boot (attempt {})...", attempt + 1);
+                    tracing::trace!("Waiting for loader boot (attempt {})", attempt + 1);
                     continue;
                 }
                 Ok(n) => {
                     got_data = true;
-                    tracing::warn!("[Firehose] Drain got {} bytes:\n{}", n, hex_dump(&buf[..n], 128));
-                    tracing::warn!("[Firehose] Drain TXT: {}", String::from_utf8_lossy(&buf[..n]));
+                    total += n;
                     let text = String::from_utf8_lossy(&buf[..n]);
+                    // Check if this chunk contains a valid response
                     if text.contains("<response ") || text.contains("</data>") {
-                        tracing::warn!("[Firehose] Drain found valid response — NOT discarding");
+                        tracing::debug!("Drain: response ready ({} bytes)", total);
                         return Ok(());
                     }
+                    // Keep draining
+                    tracing::trace!("Drain: {} bytes (waiting for response)", n);
                     break;
                 }
             }
         }
 
         if !got_data {
-            tracing::warn!("[Firehose] No init data received after Sahara (device may be slow to boot)");
+            tracing::debug!("No init data received after Sahara");
             return Ok(());
         }
 
-        // Drain remaining data
-        let mut total = 0usize;
+        // Drain remaining data until we find a response or timeout
         loop {
             match transport.read(buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     total += n;
-                    tracing::warn!("[Firehose] Drain extra {} bytes:\n{}", n, hex_dump(&buf[..n], 128));
-                    tracing::warn!("[Firehose] Drain TXT: {}", String::from_utf8_lossy(&buf[..n]));
                     let text = String::from_utf8_lossy(&buf[..n]);
                     if text.contains("<response ") || text.contains("</data>") {
-                        tracing::warn!("[Firehose] Drain found valid response — NOT discarding");
+                        tracing::debug!("Drain: response ready ({} bytes)", total);
                         return Ok(());
                     }
                 }
             }
         }
-        tracing::info!("[Firehose] Init messages drained ({} bytes)", total);
+        tracing::debug!("Drain complete ({} bytes, no response found)", total);
         Ok(())
     }
 

@@ -883,8 +883,8 @@ impl Job for XmlJob {
         let resp = ctx.raw_xml(&xml_content).await?;
 
         let mut msg = "XML command sent successfully".to_string();
-        if let Some(ref error_log) = resp.error_log {
-            msg.push_str(&format!("\nError: {}", error_log));
+        if let Some(ref error) = resp.error {
+            msg.push_str(&format!("\nError: {}", error));
         }
 
         Ok(JobResult {

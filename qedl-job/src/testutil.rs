@@ -57,14 +57,14 @@ impl MockJobContext {
     pub fn push_xml_ack(&mut self) {
         self.xml_responses.push(XmlResponse {
             is_ack: true,
-            error_log: None,
+            error: None,
         });
     }
 
     pub fn push_xml_nak(&mut self, reason: &str) {
         self.xml_responses.push(XmlResponse {
             is_ack: false,
-            error_log: Some(reason.to_string()),
+            error: Some(reason.to_string()),
         });
     }
 }
@@ -134,7 +134,7 @@ impl JobContext for MockJobContext {
         } else {
             Ok(XmlResponse {
                 is_ack: true,
-                error_log: None,
+                error: None,
             })
         }
     }

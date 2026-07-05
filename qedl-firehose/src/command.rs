@@ -41,6 +41,50 @@ pub enum FirehoseCommand {
 }
 
 impl FirehoseCommand {
+    /// Semantic command name for TRACE logging.
+    /// Returns a human-readable summary like "configure", "read(lun=0, start=1, count=1)".
+    pub fn name(&self) -> String {
+        match self {
+            Self::Configure { .. } => "configure".to_string(),
+            Self::Read {
+                physical_partition,
+                start_sector,
+                num_sectors,
+                ..
+            } => {
+                format!(
+                    "read(lun={}, start={}, count={})",
+                    physical_partition, start_sector, num_sectors
+                )
+            }
+            Self::Program {
+                physical_partition,
+                start_sector,
+                num_sectors,
+                ..
+            } => {
+                format!(
+                    "program(lun={}, start={}, count={})",
+                    physical_partition, start_sector, num_sectors
+                )
+            }
+            Self::Erase {
+                physical_partition,
+                start_sector,
+                num_sectors,
+                ..
+            } => {
+                format!(
+                    "erase(lun={}, start={}, count={})",
+                    physical_partition, start_sector, num_sectors
+                )
+            }
+            Self::GetStorageInfo => "getstorageinfo".to_string(),
+            Self::Power { value } => format!("power({})", value),
+            Self::RawXml(_) => "raw-xml".to_string(),
+        }
+    }
+
     pub fn to_xml(&self) -> String {
         match self {
             Self::Configure {

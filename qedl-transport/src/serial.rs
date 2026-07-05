@@ -52,14 +52,16 @@ impl Transport for SerialTransport {
     async fn write(&mut self, buf: &[u8]) -> io::Result<()> {
         let mut port = self.port.lock().map_err(|e| io::Error::other(e.to_string()))?;
         Write::write_all(&mut *port, buf)?;
-        tracing::trace!(tx = ?buf, "TX");
+        #[cfg(feature = "trace-transport")]
+        tracing::trace!(len = buf.len(), data = ?buf, "TX");
         Ok(())
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut port = self.port.lock().map_err(|e| io::Error::other(e.to_string()))?;
         let n = Read::read(&mut *port, buf)?;
-        tracing::trace!(rx = ?&buf[..n], "RX");
+        #[cfg(feature = "trace-transport")]
+        tracing::trace!(len = n, data = ?&buf[..n], "RX");
         Ok(n)
     }
 

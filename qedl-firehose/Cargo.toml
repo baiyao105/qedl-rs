@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 description = "Qualcomm Firehose XML command engine"
 
+[features]
+default = []
+trace-xml = []
+
 [dependencies]
 qedl-core.workspace = true
 qedl-transport.workspace = true

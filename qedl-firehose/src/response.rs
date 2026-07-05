@@ -5,7 +5,9 @@ use quick_xml::events::Event;
 pub struct FirehoseResponse {
     pub value: ResponseValue,
     pub raw_mode: bool,
-    pub error_log: Option<String>,
+    /// Error message from NAK response. Only populated when value is Nak.
+    pub error: Option<String>,
+    /// Log messages from `<log>` tags. Printed at TRACE level.
     pub logs: Vec<String>,
 
     pub memory_name: Option<String>,
@@ -35,7 +37,7 @@ impl FirehoseResponse {
 
         let mut value = ResponseValue::Ack;
         let mut raw_mode = false;
-        let mut error_log: Option<String> = None;
+        let mut error: Option<String> = None;
         let mut logs: Vec<String> = Vec::new();
         let mut memory_name: Option<String> = None;
         let mut sector_size: Option<u32> = None;
@@ -76,7 +78,10 @@ impl FirehoseResponse {
                         in_log = true;
                         log_text.clear();
                         if let Some(v) = get_attr(e, "value") {
-                            error_log = Some(v.clone());
+                            // <log value="..."> attribute is the error message for NAK
+                            if error.is_none() {
+                                error = Some(v.clone());
+                            }
                             logs.push(v);
                         }
                     }
@@ -139,8 +144,9 @@ impl FirehoseResponse {
                     if tag_lower == "log" {
                         if in_log && !log_text.is_empty() {
                             logs.push(log_text.clone());
-                            if error_log.is_none() {
-                                error_log = Some(log_text.clone());
+                            // Text content of <log> tag is also an error for NAK
+                            if error.is_none() {
+                                error = Some(log_text.clone());
                             }
                         }
                         in_log = false;
@@ -157,7 +163,7 @@ impl FirehoseResponse {
         Ok(Self {
             value,
             raw_mode,
-            error_log,
+            error,
             logs,
             memory_name,
             sector_size,

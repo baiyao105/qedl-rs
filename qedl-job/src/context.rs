@@ -6,7 +6,7 @@ use qedl_core::{PartitionInfo, ProgressReporter, Session};
 #[derive(Debug, Clone)]
 pub struct XmlResponse {
     pub is_ack: bool,
-    pub error_log: Option<String>,
+    pub error: Option<String>,
 }
 
 /// Shared zero buffer for write-zero erase operations.

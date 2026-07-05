@@ -4,7 +4,7 @@ use crate::error::{Result, SaharaError};
 use crate::protocol::*;
 use bytes::Bytes;
 use qedl_core::protocol::sahara::exec_cmd;
-use qedl_core::{Event, EventSink, SaharaEvent, emit_event, hex_dump};
+use qedl_core::{Event, EventSink, SaharaEvent, emit_event};
 use qedl_transport::Transport;
 use std::path::Path;
 use std::sync::Arc;
@@ -72,25 +72,24 @@ impl<T: Transport> SaharaSession<T> {
         loader_path: &Path,
         mode: SaharaMode,
     ) -> std::result::Result<(T, SaharaDeviceInfo), SaharaError> {
-        tracing::info!("Starting Sahara handshake");
+        tracing::info!("Sahara handshake started");
         self.emit(SaharaEvent::HandshakeStarted);
         let start = std::time::Instant::now();
 
         let hello = match self.read_hello().await {
             Ok(h) => h,
             Err(SaharaError::AlreadyInFirehose) => {
-                tracing::warn!("Device is already in Firehose mode, skipping Sahara handshake");
+                tracing::info!("Device already in Firehose mode, skipping Sahara");
                 self.emit(SaharaEvent::AlreadyInFirehoseMode);
                 return Ok((self.transport, SaharaDeviceInfo::default()));
             }
             Err(_) => {
-                tracing::warn!("Hello not received, trying PblHack recovery...");
+                tracing::debug!("Hello not received, trying PblHack recovery");
                 self.pbl_hack(mode).await?;
-                // PblHack 成功后，重新读 Hello
                 match self.read_hello().await {
                     Ok(h) => h,
                     Err(SaharaError::AlreadyInFirehose) => {
-                        tracing::warn!("Device is already in Firehose mode after PblHack, skipping Sahara handshake");
+                        tracing::info!("Device already in Firehose mode after PblHack, skipping Sahara");
                         self.emit(SaharaEvent::AlreadyInFirehoseMode);
                         return Ok((self.transport, SaharaDeviceInfo::default()));
                     }
@@ -99,11 +98,10 @@ impl<T: Transport> SaharaSession<T> {
             }
         };
 
-        tracing::info!(
-            "Sahara Hello: Version={}, MinVersion={}, MaxCmdLen={}, Mode={:?}",
+        tracing::debug!(
+            "Sahara Hello: version={}, min_version={}, mode={:?}",
             hello.version,
             hello.version_min,
-            hello.max_command_length,
             hello.mode
         );
 
@@ -112,45 +110,42 @@ impl<T: Transport> SaharaSession<T> {
         // Query device info if device supports command mode
         let mut device_info = SaharaDeviceInfo::default();
         if hello.mode == SaharaMode::Command {
-            tracing::info!("[Sahara] Device in command mode, querying info...");
+            tracing::debug!("Device in command mode, querying info");
             match self.get_msm_hw_id().await {
                 Ok(id) => {
-                    tracing::info!("[Sahara] MSM HW ID: {:02X?}", id);
+                    tracing::debug!("MSM HW ID: {:02X?}", id);
                     device_info.msm_hw_id = Some(id);
                 }
-                Err(e) => tracing::debug!("[Sahara] get_msm_hw_id failed: {}", e),
+                Err(e) => tracing::trace!("get_msm_hw_id failed: {}", e),
             }
             match self.get_serial_num().await {
                 Ok(num) => {
-                    tracing::info!("[Sahara] Serial: 0x{:016X}", num);
+                    tracing::debug!("Serial: 0x{:016X}", num);
                     device_info.serial_num = Some(num);
                 }
-                Err(e) => tracing::debug!("[Sahara] get_serial_num failed: {}", e),
+                Err(e) => tracing::trace!("get_serial_num failed: {}", e),
             }
         }
 
-        tracing::info!(path = ?loader_path, "Reading loader file");
+        tracing::debug!(path = ?loader_path, "Loading Sahara loader");
         let loader_data = Bytes::from(std::fs::read(loader_path).map_err(|e| SaharaError::TransferFailed {
             offset: 0,
             reason: format!("failed to read loader file: {}", e),
         })?);
-        tracing::info!(
+        tracing::debug!(
             size = loader_data.len(),
-            size_kb = loader_data.len() / 1024,
-            "Loader loaded into memory"
+            "Loader loaded ({} KB)",
+            loader_data.len() / 1024
         );
 
         self.upload_loader(&loader_data).await?;
 
-        tracing::info!("Sending Sahara Done");
+        tracing::debug!("Sending Sahara Done");
         self.send_done().await?;
 
         self.state = SaharaState::Done;
         self.emit(SaharaEvent::HandshakeComplete);
-        tracing::info!(
-            elapsed = ?start.elapsed(),
-            "Sahara handshake complete, device entering Firehose mode"
-        );
+        tracing::info!("Sahara handshake complete ({:.1}s)", start.elapsed().as_secs_f64());
         Ok((self.transport, device_info))
     }
 
@@ -160,22 +155,12 @@ impl<T: Transport> SaharaSession<T> {
 
         self.transport.set_timeout(Duration::from_secs(1));
 
-        tracing::debug!("[Sahara] Reading Hello (1s timeout)...");
+        tracing::trace!("Sahara reading Hello (1s timeout)");
         let mut buf = [0u8; consts::HELLO_PACKET_SIZE];
         match self.transport.read_exact(&mut buf).await {
             Ok(()) => {
-                // If first byte is printable ASCII (>= 0x20) and not a known Sahara command,
-                // the device is already in Firehose mode — return specific error
                 if buf[0] >= 0x20 {
-                    tracing::warn!(
-                        "[Sahara] First byte 0x{:02X} is ASCII text, device is in Firehose mode, not Sahara",
-                        buf[0]
-                    );
-                    tracing::warn!(
-                        "[Sahara] Raw:\n{}TXT: {}",
-                        hex_dump(&buf[..32], 32),
-                        String::from_utf8_lossy(&buf[..32])
-                    );
+                    tracing::debug!("Sahara first byte 0x{:02X} is ASCII, device in Firehose mode", buf[0]);
                     return Err(SaharaError::AlreadyInFirehose);
                 }
                 let cmd = u32::from_le_bytes(buf[0..4].try_into().map_err(|e| SaharaError::TransferFailed {
@@ -183,10 +168,10 @@ impl<T: Transport> SaharaSession<T> {
                     reason: format!("failed to parse command: {}", e),
                 })?);
                 if cmd != SaharaCommand::Hello as u32 {
-                    tracing::warn!("[Sahara] Expected Hello(0x01), got 0x{:08X}", cmd);
+                    tracing::debug!("Sahara expected Hello(0x01), got 0x{:08X}", cmd);
                     return Err(SaharaError::UnexpectedCommand { cmd });
                 }
-                tracing::debug!("[Sahara] Hello received (48 bytes)");
+                tracing::trace!("Sahara Hello received (48 bytes)");
                 self.state = SaharaState::HelloReceived;
                 self.emit(SaharaEvent::HelloReceived);
                 self.max_chunk_size =
@@ -197,7 +182,7 @@ impl<T: Transport> SaharaSession<T> {
                 Ok(Self::parse_hello(&buf)?)
             }
             Err(e) => {
-                tracing::debug!("[Sahara] Hello read failed: {}", e);
+                tracing::trace!("Sahara Hello read failed: {}", e);
                 Err(SaharaError::HelloFailed)
             }
         }
@@ -208,7 +193,7 @@ impl<T: Transport> SaharaSession<T> {
     /// 2. Wait for CMD_READY
     /// 3. ModeSwitch to recover
     async fn pbl_hack(&mut self, mode: SaharaMode) -> Result<()> {
-        tracing::info!("[Sahara] PblHack: sending HelloResponse without reading Hello...");
+        tracing::debug!("Sahara PblHack: sending HelloResponse without Hello");
 
         let _ = self.transport.flush().await;
 
@@ -222,10 +207,10 @@ impl<T: Transport> SaharaSession<T> {
             reserved: [0; 6],
         };
         self.send_hello_response_raw(&hello_resp).await?;
-        tracing::debug!("[Sahara] PblHack: HelloResponse sent");
+        tracing::trace!("Sahara PblHack: HelloResponse sent");
 
         self.transport.set_timeout(Duration::from_millis(10));
-        let mut rsp_buf = [0u8; 16]; // execute_rsp_t 大小
+        let mut rsp_buf = [0u8; 16];
         match self.transport.read_exact(&mut rsp_buf).await {
             Ok(()) => {
                 let cmd = u32::from_le_bytes(rsp_buf[0..4].try_into().map_err(|e| SaharaError::TransferFailed {
@@ -233,7 +218,7 @@ impl<T: Transport> SaharaSession<T> {
                     reason: format!("failed to parse command: {}", e),
                 })?);
                 if cmd == SaharaCommand::CmdReady as u32 {
-                    tracing::debug!("[Sahara] PblHack: got CMD_READY");
+                    tracing::trace!("Sahara PblHack: CMD_READY");
                 } else if cmd == SaharaCommand::EndTransfer as u32 {
                     let status =
                         u32::from_le_bytes(rsp_buf[8..12].try_into().map_err(|e| SaharaError::TransferFailed {
@@ -241,27 +226,27 @@ impl<T: Transport> SaharaSession<T> {
                             reason: format!("failed to parse status: {}", e),
                         })?);
                     if status == SaharaStatus::InvalidCmd as u32 {
-                        tracing::debug!("[Sahara] PblHack: got NAK(INVALID_CMD), continuing...");
+                        tracing::trace!("Sahara PblHack: NAK(INVALID_CMD)");
                     }
                 }
             }
             Err(_) => {
-                tracing::debug!("[Sahara] PblHack: no response, sending ModeSwitch...");
+                tracing::trace!("Sahara PblHack: no response, sending ModeSwitch");
             }
         }
 
         self.mode_switch(mode).await?;
-        tracing::info!("[Sahara] PblHack: recovery complete");
+        tracing::debug!("Sahara PblHack recovery complete");
         Ok(())
     }
 
     async fn mode_switch(&mut self, mode: SaharaMode) -> Result<()> {
-        let mut pkt = [0u8; 12]; // execute_cmd_t: cmd(4) + len(4) + client_cmd(4)
+        let mut pkt = [0u8; 12];
         pkt[0..4].copy_from_slice(&(SaharaCommand::SwitchMode as u32).to_le_bytes());
         pkt[4..8].copy_from_slice(&12u32.to_le_bytes());
         pkt[8..12].copy_from_slice(&(mode as u32).to_le_bytes());
         self.transport.write(&pkt).await?;
-        tracing::debug!("[Sahara] ModeSwitch sent (mode={:?})", mode);
+        tracing::trace!("Sahara ModeSwitch sent (mode={:?})", mode);
         Ok(())
     }
 
@@ -291,8 +276,8 @@ impl<T: Transport> SaharaSession<T> {
         }
 
         self.transport.write(&pkt).await?;
-        tracing::debug!(
-            "[Sahara] HelloResponse sent (version={}, mode={:?})",
+        tracing::trace!(
+            "Sahara HelloResponse sent (version={}, mode={:?})",
             resp.version,
             resp.mode
         );
@@ -326,7 +311,6 @@ impl<T: Transport> SaharaSession<T> {
 
             match SaharaCommand::from_u32(cmd) {
                 Some(SaharaCommand::ReadData) => {
-                    // 32-bit ReadData: cmd(4) + len(4) + image_id(4) + offset(4) + length(4) = 20
                     let mut body = [0u8; 12];
                     self.transport.read_exact(&mut body).await?;
                     let image_id =
@@ -343,17 +327,11 @@ impl<T: Transport> SaharaSession<T> {
                             offset: 0,
                             reason: format!("failed to parse length: {}", e),
                         })?) as u64;
-                    tracing::trace!(
-                        image = image_id,
-                        offset = offset,
-                        length = length,
-                        "Sahara ReadData request"
-                    );
+                    tracing::trace!(image = image_id, offset = offset, length = length, "Sahara ReadData");
                     self.send_loader_chunk(loader_data, image_id, offset, length).await?;
                     total_sent += length;
                 }
                 Some(SaharaCommand::ReadData64) => {
-                    // 64-bit ReadData: cmd(4) + len(4) + image_id(8) + offset(8) + length(8) = 32
                     let mut body = [0u8; 24];
                     self.transport.read_exact(&mut body).await?;
                     let image_id =
@@ -371,12 +349,7 @@ impl<T: Transport> SaharaSession<T> {
                             offset: 0,
                             reason: format!("failed to parse length: {}", e),
                         })?);
-                    tracing::trace!(
-                        image = image_id,
-                        offset = offset,
-                        length = length,
-                        "Sahara ReadData64 request"
-                    );
+                    tracing::trace!(image = image_id, offset = offset, length = length, "Sahara ReadData64");
                     self.send_loader_chunk(loader_data, image_id as u32, offset, length)
                         .await?;
                     total_sent += length;
@@ -384,7 +357,7 @@ impl<T: Transport> SaharaSession<T> {
                 Some(SaharaCommand::EndTransfer) => {
                     let elapsed = start.elapsed().as_secs_f64();
                     tracing::info!(
-                        "Sahara loader transfer complete: {} bytes sent in {:.3}s ({:.2} MiB/s)",
+                        "Sahara loader transfer complete: {} bytes in {:.1}s ({:.1} MB/s)",
                         total_sent,
                         elapsed,
                         (total_sent as f64 / 1024.0 / 1024.0) / elapsed
@@ -392,18 +365,18 @@ impl<T: Transport> SaharaSession<T> {
                     break;
                 }
                 Some(SaharaCommand::CmdReady) => {
-                    tracing::debug!("[Sahara] Device sent CMD_READY during transfer");
+                    tracing::trace!("Sahara CMD_READY during transfer");
                 }
                 Some(SaharaCommand::DoneResponse) => {
                     let status = u32::from_le_bytes(cmd_hdr[4..8].try_into().unwrap_or([0; 4]));
-                    tracing::debug!("[Sahara] DoneResponse received (status={}), transfer complete", status);
+                    tracing::debug!("Sahara DoneResponse (status={})", status);
                     break;
                 }
                 Some(other) => {
-                    tracing::warn!(command = ?other, "Unexpected Sahara command during transfer, ignoring");
+                    tracing::debug!(command = ?other, "Unexpected Sahara command during transfer");
                 }
                 None => {
-                    tracing::warn!(command_id = cmd, "Unknown Sahara command ID during transfer, ignoring");
+                    tracing::debug!(command_id = cmd, "Unknown Sahara command ID during transfer");
                 }
             }
         }
@@ -444,8 +417,8 @@ impl<T: Transport> SaharaSession<T> {
             total: total_size,
         });
 
-        tracing::debug!(
-            "[Sahara] Sent {} bytes at offset {:#x} (total: {} KB)",
+        tracing::trace!(
+            "Sahara chunk sent: {} bytes at offset {:#x} (total: {} KB)",
             length,
             offset,
             (offset + length) / 1024
@@ -463,9 +436,8 @@ impl<T: Transport> SaharaSession<T> {
         done[0..4].copy_from_slice(&(SaharaCommand::DoneRequest as u32).to_le_bytes());
         done[4..8].copy_from_slice(&8u32.to_le_bytes());
         self.transport.write(&done).await?;
-        tracing::debug!("[Sahara] DoneRequest sent");
+        tracing::trace!("Sahara DoneRequest sent");
 
-        // 读取 DoneResponse + 后续 Sahara 包（预计 12-20 字节）
         self.transport.set_timeout(Duration::from_secs(2));
         let mut rsp_buf = [0u8; 32];
         let n = self.transport.read(&mut rsp_buf).await?;
@@ -474,14 +446,9 @@ impl<T: Transport> SaharaSession<T> {
                 offset: 0,
                 reason: format!("failed to parse done response: {}", e),
             })?);
-            tracing::info!(
-                "[Sahara] Done response: {} bytes, first_cmd=0x{:02X}:\n{}",
-                n,
-                cmd,
-                hex_dump(&rsp_buf[..n], 64)
-            );
+            tracing::debug!("Sahara Done response: {} bytes, first_cmd=0x{:02X}", n, cmd);
         } else {
-            tracing::warn!("[Sahara] No Done response received");
+            tracing::debug!("Sahara Done response: no data received");
         }
 
         Ok(())
@@ -550,21 +517,22 @@ impl<T: Transport> SaharaSession<T> {
     /// This sends an ExecuteRequest to the device and reads back the ExecuteData response.
     /// The device must be in Command mode for this to work.
     pub async fn exec_cmd(&mut self, client_cmd: u32) -> Result<Vec<u8>> {
-        // Send ExecuteRequest: cmd(4) + len(4) + client_cmd(4) = 12 bytes
         let mut pkt = [0u8; 12];
         pkt[0..4].copy_from_slice(&(SaharaCommand::ExecuteRequest as u32).to_le_bytes());
         pkt[4..8].copy_from_slice(&12u32.to_le_bytes());
         pkt[8..12].copy_from_slice(&client_cmd.to_le_bytes());
         self.transport.write(&pkt).await?;
-        tracing::debug!("[Sahara] ExecuteRequest sent (client_cmd=0x{:02X})", client_cmd);
+        tracing::trace!("Sahara exec cmd=0x{:02X}", client_cmd);
 
-        // Read ExecuteData response
         self.transport.set_timeout(Duration::from_secs(2));
         let mut hdr = [0u8; 16];
-        self.transport.read_exact(&mut hdr).await.map_err(|e| SaharaError::TransferFailed {
-            offset: 0,
-            reason: format!("failed to read exec response header: {}", e),
-        })?;
+        self.transport
+            .read_exact(&mut hdr)
+            .await
+            .map_err(|e| SaharaError::TransferFailed {
+                offset: 0,
+                reason: format!("failed to read exec response header: {}", e),
+            })?;
 
         let cmd = u32::from_le_bytes(hdr[0..4].try_into().map_err(|e| SaharaError::TransferFailed {
             offset: 0,
@@ -572,7 +540,6 @@ impl<T: Transport> SaharaSession<T> {
         })?);
 
         if cmd == SaharaCommand::ExecuteResponse as u32 {
-            // ExecuteResponse: cmd(4) + len(4) + client_cmd(4) + data_len(4)
             let data_len = u32::from_le_bytes(hdr[12..16].try_into().map_err(|e| SaharaError::TransferFailed {
                 offset: 0,
                 reason: format!("failed to parse data_len: {}", e),
@@ -583,13 +550,15 @@ impl<T: Transport> SaharaSession<T> {
             }
 
             let mut data = vec![0u8; data_len];
-            self.transport.read_exact(&mut data).await.map_err(|e| SaharaError::TransferFailed {
-                offset: 0,
-                reason: format!("failed to read exec data ({} bytes): {}", data_len, e),
-            })?;
+            self.transport
+                .read_exact(&mut data)
+                .await
+                .map_err(|e| SaharaError::TransferFailed {
+                    offset: 0,
+                    reason: format!("failed to read exec data ({} bytes): {}", data_len, e),
+                })?;
             Ok(data)
         } else if cmd == SaharaCommand::EndTransfer as u32 {
-            // Error response
             let status = u32::from_le_bytes(hdr[8..12].try_into().map_err(|e| SaharaError::TransferFailed {
                 offset: 0,
                 reason: format!("failed to parse end transfer status: {}", e),
@@ -615,9 +584,11 @@ impl<T: Transport> SaharaSession<T> {
     pub async fn get_serial_num(&mut self) -> Result<u64> {
         let data = self.exec_cmd(exec_cmd::SERIAL_NUM_READ).await?;
         if data.len() >= 4 {
-            Ok(u64::from_le_bytes(data[..8].try_into().map_err(|e| SaharaError::TransferFailed {
-                offset: 0,
-                reason: format!("failed to parse serial num: {}", e),
+            Ok(u64::from_le_bytes(data[..8].try_into().map_err(|e| {
+                SaharaError::TransferFailed {
+                    offset: 0,
+                    reason: format!("failed to parse serial num: {}", e),
+                }
             })?))
         } else {
             Err(SaharaError::TransferFailed {
@@ -631,10 +602,9 @@ impl<T: Transport> SaharaSession<T> {
     ///
     /// This is used to query device info before entering Firehose mode.
     pub async fn enter_command_mode(mut self) -> Result<Self> {
-        tracing::info!("[Sahara] Entering command mode");
+        tracing::debug!("Entering Sahara command mode");
         self.mode_switch(SaharaMode::Command).await?;
 
-        // Wait for CMD_READY
         self.transport.set_timeout(Duration::from_secs(2));
         let mut buf = [0u8; 8];
         match self.transport.read_exact(&mut buf).await {
@@ -644,13 +614,13 @@ impl<T: Transport> SaharaSession<T> {
                     reason: format!("failed to parse command: {}", e),
                 })?);
                 if cmd == SaharaCommand::CmdReady as u32 {
-                    tracing::info!("[Sahara] Command mode ready");
+                    tracing::debug!("Sahara command mode ready");
                 } else {
-                    tracing::warn!("[Sahara] Expected CMD_READY(0x0B), got 0x{:08X}", cmd);
+                    tracing::debug!("Sahara CMD_READY expected, got 0x{:08X}", cmd);
                 }
             }
             Err(e) => {
-                tracing::warn!("[Sahara] Timeout waiting for CMD_READY: {}", e);
+                tracing::debug!("Sahara CMD_READY timeout: {}", e);
             }
         }
 

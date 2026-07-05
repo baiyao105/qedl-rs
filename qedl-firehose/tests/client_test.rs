@@ -93,7 +93,7 @@ async fn test_raw_xml_nak() {
     let mut client = FirehoseClient::new();
     let resp = client.raw_xml(&mut t, r#"<custom />"#).await.unwrap();
     assert!(resp.is_nak());
-    assert_eq!(resp.error_log.as_deref(), Some("bad command"));
+    assert_eq!(resp.error.as_deref(), Some("bad command"));
 }
 
 #[tokio::test]
