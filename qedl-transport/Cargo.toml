@@ -13,8 +13,8 @@ tracing.workspace = true
 bytes.workspace = true
 serialport = "4"
 rusb = "0.9"
-tokio = { version = "1", features = ["rt", "time", "macros"] }
-async-trait = "0.1"
+tokio = { workspace = true, features = ["rt", "time", "macros"] }
+async-trait.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }

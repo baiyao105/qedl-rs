@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Qualcomm EDL SDK — Sahara + Firehose flashing engine"
+description = "Qualcomm EDL SDK - Sahara + Firehose flashing engine"
 
 [dependencies]
 qedl-core.workspace = true
@@ -14,8 +14,8 @@ qedl-storage.workspace = true
 qedl-job.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "time"] }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
 
 # Optional dependencies (gated by features)
 qedl-sahara = { workspace = true, optional = true }
@@ -30,5 +30,5 @@ gui = ["qedl-core/gui"]
 minimal = []
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+tracing-subscriber.workspace = true

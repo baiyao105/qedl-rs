@@ -24,25 +24,26 @@ categories = ["embedded", "hardware-support"]
 
 [workspace.dependencies]
 thiserror = "2"
-color-eyre = "0.6"
-log = "0.4"
+anyhow = "1"
+bytes = "1"
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+quick-xml = "0.37"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tracing-indicatif = "0.3"
 clap = { version = "4", features = ["derive"] }
-bytes = "1"
-chrono = "0.4"
-quick-xml = "0.37"
-indicatif = "0.17"
+color-eyre = "0.6"
 owo-colors = "4"
+chrono = "0.4"
+indicatif = "0.18"
+md-5 = "0.11"
+hex = "0.4"
+crc32fast = "1.4"
 # test utilities
-rstest = "0.18"
 pretty_assertions = "1"
-mockall = "0.12"
 tempfile = "3"
 insta = "1"
-test-log = "0.2"
-criterion = "0.5"
 
 qedl-core      = { path = "qedl-core" }
 qedl-transport = { path = "qedl-transport" }

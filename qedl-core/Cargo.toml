@@ -14,8 +14,8 @@ default = []
 gui = []
 
 [dependencies]
-thiserror = "2"
-quick-xml = "0.37"
+thiserror.workspace = true
+quick-xml.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros"] }

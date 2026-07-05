@@ -12,9 +12,9 @@ qedl-transport.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 bytes.workspace = true
-async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "time"] }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
 
 [dev-dependencies]
 qedl-transport.workspace = true
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
