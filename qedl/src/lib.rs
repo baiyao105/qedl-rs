@@ -5,7 +5,7 @@
 //! # Quick Start
 //!
 //! ```rust,no_run
-//! use qedl::QedlClient;
+//! use qedl::{EraseMethod, QedlClient};
 //! use std::path::Path;
 //!
 //! #[tokio::main]
@@ -15,7 +15,7 @@
 //!         .build();
 //!
 //!     client.init().await?;
-//!     client.flash(Path::new("rawprogram.xml"), None, Path::new("./images")).await?;
+//!     client.flash(Path::new("rawprogram.xml"), None, Path::new("./images"), EraseMethod::WriteZero).await?;
 //!     client.reboot().await?;
 //!     Ok(())
 //! }
@@ -40,7 +40,7 @@ pub use client::{QedlClient, QedlClientBuilder};
 pub use error::{QedlFacadeError, Result as QedlResult};
 
 pub use qedl_core::{DeviceState, ErrorCode, PartitionInfo, Session};
-pub use qedl_job::{ExecutorConfig, JobExecutor, JobResult};
+pub use qedl_job::{EraseMethod, ExecutorConfig, JobExecutor, JobResult};
 
 #[cfg(feature = "sahara")]
 pub use qedl_sahara::{SaharaError, SaharaSession};

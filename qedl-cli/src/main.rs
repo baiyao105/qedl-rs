@@ -2,6 +2,7 @@ mod args;
 
 use args::{Cli, Commands};
 use clap::Parser;
+use qedl::EraseMethod;
 use qedl::transport::DeviceEnumerator;
 use std::process;
 use tracing_indicatif::IndicatifLayer;
@@ -135,9 +136,17 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             println!("{}", result.message);
             Ok(())
         }
-        Commands::Erase { partition } => {
+        Commands::Erase {
+            partition,
+            native_erase,
+        } => {
             client.init().await?;
-            let result = client.erase(&partition).await?;
+            let erase_method = if native_erase {
+                EraseMethod::Native
+            } else {
+                EraseMethod::WriteZero
+            };
+            let result = client.erase(&partition, true, erase_method).await?;
             println!("{}", result.message);
             Ok(())
         }
@@ -145,10 +154,18 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             rawprogram,
             patch,
             image_dir,
+            native_erase,
         } => {
             client.init().await?;
             let image_dir = image_dir.unwrap_or_else(|| ".".into());
-            let result = client.flash(&rawprogram, patch.as_deref(), &image_dir).await?;
+            let erase_method = if native_erase {
+                EraseMethod::Native
+            } else {
+                EraseMethod::WriteZero
+            };
+            let result = client
+                .flash(&rawprogram, patch.as_deref(), &image_dir, erase_method)
+                .await?;
             println!("{}", result.message);
             Ok(())
         }

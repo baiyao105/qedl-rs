@@ -2,7 +2,9 @@ use crate::error::Result;
 use qedl_core::{DeviceState, PartitionInfo, Session};
 #[cfg(feature = "sparse")]
 use qedl_job::VerifyJob;
-use qedl_job::{DumpJob, EraseJob, ExecutorConfig, GptJob, InfoJob, JobExecutor, JobResult, WriteJob, XmlJob};
+use qedl_job::{
+    DumpJob, EraseJob, EraseMethod, ExecutorConfig, GptJob, InfoJob, JobExecutor, JobResult, WriteJob, XmlJob,
+};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -82,11 +84,18 @@ impl QedlClient {
 
     /// Flashes raw program and patch images to the device.
     #[cfg(feature = "sparse")]
-    pub async fn flash(&mut self, rawprogram: &Path, patch: Option<&Path>, image_dir: &Path) -> Result<JobResult> {
+    pub async fn flash(
+        &mut self,
+        rawprogram: &Path,
+        patch: Option<&Path>,
+        image_dir: &Path,
+        erase_method: EraseMethod,
+    ) -> Result<JobResult> {
         let job = qedl_job::FlashJob {
             rawprogram: rawprogram.to_path_buf(),
             patch: patch.map(|p| p.to_path_buf()),
             image_dir: image_dir.to_path_buf(),
+            erase_method,
         };
         self.executor.execute(&job).await.map_err(Into::into)
     }
@@ -112,9 +121,16 @@ impl QedlClient {
     }
 
     /// Erases a partition on the device.
-    pub async fn erase(&mut self, partition: &str) -> Result<JobResult> {
+    pub async fn erase(
+        &mut self,
+        partition: &str,
+        show_progress: bool,
+        erase_method: EraseMethod,
+    ) -> Result<JobResult> {
         let job = EraseJob {
             partition_name: partition.to_string(),
+            show_progress,
+            erase_method,
         };
         self.executor.execute(&job).await.map_err(Into::into)
     }

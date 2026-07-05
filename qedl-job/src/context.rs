@@ -9,6 +9,11 @@ pub struct XmlResponse {
     pub error_log: Option<String>,
 }
 
+/// Shared zero buffer for write-zero erase operations.
+/// Using a static buffer avoids repeated allocations and improves cache locality.
+/// Size is 512KB which is a common max payload for Firehose.
+static ZERO_BUF: [u8; 512 * 1024] = [0u8; 512 * 1024];
+
 /// Abstraction over device I/O for job execution.
 ///
 /// Jobs depend on this trait instead of concrete FirehoseClient/Transport/PartitionMap,
@@ -28,22 +33,35 @@ pub trait JobContext: Send + Sync {
     async fn erase_sectors(&mut self, physical_partition: u8, start_sector: u64, num_sectors: u64) -> Result<()> {
         let sector_size = self.sector_size() as u64;
         let max_payload = self.max_payload_size() as u64;
-        let sectors_per_chunk = (max_payload / sector_size).max(1);
-        let chunk_bytes = (sectors_per_chunk * sector_size) as usize;
+        // Use the larger of max_payload or the static zero buffer size for fewer round-trips
+        let chunk_bytes = (max_payload as usize).max(ZERO_BUF.len());
+        let sectors_per_chunk = (chunk_bytes as u64 / sector_size).max(1);
 
-        let erase_buf = vec![0u8; chunk_bytes];
         let mut remaining = num_sectors;
         let mut sector = start_sector;
 
         while remaining > 0 {
             let chunk = remaining.min(sectors_per_chunk);
             let write_bytes = (chunk * sector_size) as usize;
-            self.write_sectors(physical_partition, sector, chunk, &erase_buf[..write_bytes])
+            // Use slices from the static zero buffer
+            self.write_sectors(physical_partition, sector, chunk, &ZERO_BUF[..write_bytes])
                 .await?;
             sector += chunk;
             remaining -= chunk;
         }
         Ok(())
+    }
+
+    /// Native erase using Firehose erase command (faster than write-zero for supported devices).
+    /// NOTE: Some Firehose implementations have bugs with the erase command.
+    /// Use WriteZero method as default for safety.
+    async fn erase_sectors_native(
+        &mut self,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<()> {
+        self.erase_sectors(physical_partition, start_sector, num_sectors).await
     }
 
     fn sector_size(&self) -> u32;

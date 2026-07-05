@@ -1,4 +1,4 @@
-use qedl::QedlClient;
+use qedl::{EraseMethod, QedlClient};
 use std::path::Path;
 
 #[tokio::main]
@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Path::new("rawprogram.xml"),
             Some(Path::new("patch.xml")),
             Path::new("./images"),
+            EraseMethod::WriteZero,
         )
         .await?;
     println!("Flash complete: {}", result.message);

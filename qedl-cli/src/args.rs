@@ -92,7 +92,12 @@ pub enum Commands {
     Write { partition: String, file: PathBuf },
 
     /// 擦除分区
-    Erase { partition: String },
+    Erase {
+        partition: String,
+        /// 使用原生 Firehose erase 命令（更快，但部分设备可能有 bug）
+        #[arg(long)]
+        native_erase: bool,
+    },
 
     /// 根据 rawprogram.xml 刷写
     Flash {
@@ -101,6 +106,9 @@ pub enum Commands {
         /// 镜像文件所在目录（默认当前目录）
         #[arg(long, value_name = "DIR")]
         image_dir: Option<PathBuf>,
+        /// 使用原生 Firehose erase 命令（更快，但部分设备可能有 bug）
+        #[arg(long)]
+        native_erase: bool,
     },
 
     /// 校验分区

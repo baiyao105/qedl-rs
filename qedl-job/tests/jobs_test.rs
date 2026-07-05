@@ -153,11 +153,13 @@ async fn test_erase_job() {
     let mut ctx = MockJobContext::simple();
     let job = EraseJob {
         partition_name: "boot".to_string(),
+        show_progress: false,
+        erase_method: EraseMethod::WriteZero,
     };
     let result = job.execute(&mut ctx).await.unwrap();
     assert!(result.success);
     assert!(result.message.contains("erased"));
-    assert!(!ctx.write_log.is_empty());
+    assert!(!ctx.erase_log.is_empty());
 }
 
 #[tokio::test]
@@ -165,6 +167,8 @@ async fn test_erase_job_partition_not_found() {
     let mut ctx = MockJobContext::simple();
     let job = EraseJob {
         partition_name: "nonexistent".to_string(),
+        show_progress: false,
+        erase_method: EraseMethod::WriteZero,
     };
     let result = job.execute(&mut ctx).await;
     assert!(result.is_err());
@@ -174,7 +178,9 @@ async fn test_erase_job_partition_not_found() {
 async fn test_erase_job_name() {
     assert_eq!(
         EraseJob {
-            partition_name: "x".to_string()
+            partition_name: "x".to_string(),
+            show_progress: false,
+            erase_method: EraseMethod::WriteZero,
         }
         .name(),
         "erase"

@@ -10,6 +10,15 @@ use std::time::Instant;
 
 use qedl_core::util::humanize_size;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EraseMethod {
+    /// Write zero bytes to erase (default, safer - some Firehose erase commands have bugs).
+    #[default]
+    WriteZero,
+    /// Use native Firehose erase command (faster but may have bugs on some devices).
+    Native,
+}
+
 #[derive(Debug)]
 pub struct JobResult {
     pub success: bool,
@@ -329,6 +338,8 @@ impl Job for WriteJob {
 
 pub struct EraseJob {
     pub partition_name: String,
+    pub show_progress: bool,
+    pub erase_method: EraseMethod,
 }
 
 #[async_trait]
@@ -344,19 +355,67 @@ impl Job for EraseJob {
         let first_lba = entry.first_lba;
         let last_lba = entry.last_lba;
 
+        let sector_size = ctx.sector_size() as u64;
         let total_sectors = last_lba - first_lba + 1;
+        let total_bytes = total_sectors * sector_size;
 
         tracing::info!(
             partition = %self.partition_name,
             sectors = total_sectors,
-            "Erasing partition (via program-zero)"
+            size = %humanize_size(total_bytes),
+            method = ?self.erase_method,
+            "Erasing partition"
         );
 
-        ctx.erase_sectors(physical_partition, first_lba, total_sectors).await?;
+        let start_time = Instant::now();
+
+        match self.erase_method {
+            EraseMethod::Native => {
+                ctx.erase_sectors_native(physical_partition, first_lba, total_sectors)
+                    .await?;
+            }
+            EraseMethod::WriteZero => {
+                let pb = if self.show_progress {
+                    let style = ProgressStyle::default_bar()
+                        .template(
+                            "[{elapsed_precise}] [{bar:40.red/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
+                        )
+                        .expect("valid progress template")
+                        .progress_chars("#>-");
+                    let pb = ProgressBar::new(total_bytes).with_style(style);
+                    Some(pb)
+                } else {
+                    None
+                };
+
+                ctx.erase_sectors(physical_partition, first_lba, total_sectors).await?;
+
+                if let Some(pb) = pb {
+                    pb.set_position(total_bytes);
+                    pb.finish_with_message("done");
+                }
+            }
+        }
+
+        let elapsed = start_time.elapsed().as_secs_f64();
+        let avg_rate = if elapsed > 0.0 {
+            total_bytes as f64 / elapsed / 1024.0 / 1024.0
+        } else {
+            0.0
+        };
 
         Ok(JobResult {
             success: true,
-            message: format!("erased {}", self.partition_name),
+            message: format!(
+                "erased {} ({}) via {} @ {:.1} MB/s",
+                self.partition_name,
+                humanize_size(total_bytes),
+                match self.erase_method {
+                    EraseMethod::WriteZero => "write-zero",
+                    EraseMethod::Native => "native-erase",
+                },
+                avg_rate
+            ),
             steps_completed: 1,
         })
     }
@@ -371,6 +430,7 @@ pub struct FlashJob {
     pub rawprogram: PathBuf,
     pub patch: Option<PathBuf>,
     pub image_dir: PathBuf,
+    pub erase_method: EraseMethod,
 }
 
 #[cfg(feature = "sparse")]
@@ -402,22 +462,16 @@ impl Job for FlashJob {
             tracing::debug!(task_num = i + 1, total = task_list.len(), task_type = ?task.task_type, "Executing flash task");
 
             match task.task_type {
-                qedl_image::TaskType::Erase => {
-                    let chunk_bytes = (sectors_per_chunk * sector_size) as usize;
-                    let erase_buf = vec![0u8; chunk_bytes];
-
-                    let mut remaining = task.num_sectors;
-                    let mut sector = task.start_sector;
-                    while remaining > 0 {
-                        let chunk = remaining.min(sectors_per_chunk);
-                        let write_bytes = (chunk * sector_size) as usize;
-
-                        ctx.write_sectors(task.physical_partition, sector, chunk, &erase_buf[..write_bytes])
+                qedl_image::TaskType::Erase => match self.erase_method {
+                    EraseMethod::Native => {
+                        ctx.erase_sectors_native(task.physical_partition, task.start_sector, task.num_sectors)
                             .await?;
-                        sector += chunk;
-                        remaining -= chunk;
                     }
-                }
+                    EraseMethod::WriteZero => {
+                        ctx.erase_sectors(task.physical_partition, task.start_sector, task.num_sectors)
+                            .await?;
+                    }
+                },
                 qedl_image::TaskType::Program => {
                     let Some(ref filename) = task.filename else {
                         tracing::warn!("Skipping program task with no filename");

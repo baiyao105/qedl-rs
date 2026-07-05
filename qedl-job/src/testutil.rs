@@ -147,6 +147,21 @@ impl JobContext for MockJobContext {
         }
     }
 
+    async fn erase_sectors(&mut self, physical_partition: u8, start_sector: u64, num_sectors: u64) -> Result<()> {
+        self.erase_log.push((physical_partition, start_sector, num_sectors));
+        Ok(())
+    }
+
+    async fn erase_sectors_native(
+        &mut self,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<()> {
+        self.erase_log.push((physical_partition, start_sector, num_sectors));
+        Ok(())
+    }
+
     fn progress(&self) -> &dyn ProgressReporter {
         &NoopProgress
     }
