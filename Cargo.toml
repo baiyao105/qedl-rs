@@ -34,6 +34,7 @@ bytes = "1"
 chrono = "0.4"
 quick-xml = "0.37"
 indicatif = "0.17"
+owo-colors = "4"
 # test utilities
 rstest = "0.18"
 pretty_assertions = "1"

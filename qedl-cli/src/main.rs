@@ -1,7 +1,10 @@
 mod args;
+mod output;
 
 use args::{Cli, Commands};
 use clap::Parser;
+use output::*;
+use owo_colors::OwoColorize;
 use qedl::EraseMethod;
 use qedl::transport::DeviceEnumerator;
 use std::process;
@@ -42,7 +45,7 @@ async fn main() -> color_eyre::Result<()> {
             Ok(device) => tracing::info!("Device found after waiting: {}", device),
             Err(e) => {
                 let msg = format!("{}", e);
-                eprintln!("Error: {}", msg);
+                error(&msg);
                 process::exit(if msg.contains("not found") { 2 } else { 1 });
             }
         }
@@ -73,39 +76,54 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
     match command {
         Commands::List => {
             let devices = DeviceEnumerator::list()?;
-            if devices.is_empty() {
-                println!("No 9008/DIAG devices found.");
-            } else {
-                println!("Found {} device(s):", devices.len());
-                for dev in &devices {
-                    println!("  {}", dev);
-                }
-            }
+            let device_strs: Vec<String> = devices.iter().map(|d| d.to_string()).collect();
+            device_list(&device_strs);
             Ok(())
         }
         Commands::Info => {
             client.init().await?;
             let result = client.info().await?;
-            println!("{}", result.message);
+            header("Storage Info");
+            for line in result.message.lines() {
+                if let Some((key, value)) = line.split_once(':') {
+                    kv(key.trim(), value.trim());
+                } else {
+                    info(line);
+                }
+            }
             Ok(())
         }
         Commands::Gpt => {
             client.init().await?;
             let result = client.gpt().await?;
-            println!("{}", result.message);
+            header("Partition Table");
+            for line in result.message.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                // First line is the count header
+                if line.ends_with(':') {
+                    println!("    {}", line.bold());
+                } else {
+                    // Parse and format partition rows
+                    // Format: "  name                  LBA first - last  size  LUN x"
+                    println!("    {}", line);
+                }
+            }
             Ok(())
         }
         Commands::Reboot => {
             client.init_firehose_only().await?;
             client.reboot().await?;
-            println!("Device rebooting...");
+            success("Device rebooting...");
             Ok(())
         }
         Commands::Xml { xml, file } => {
             client.init_firehose_only().await?;
             let xml_content = resolve_xml_input(xml, file)?;
             let result = client.raw_xml(&xml_content).await?;
-            println!("{}", result.message);
+            xml_response(result.success, &result.message);
             if !result.success {
                 process::exit(1);
             }
@@ -127,13 +145,13 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             } else {
                 client.dump(&partition, &file).await?
             };
-            println!("{}", result.message);
+            success(&result.message);
             Ok(())
         }
         Commands::Write { partition, file } => {
             client.init().await?;
             let result = client.write(&partition, &file).await?;
-            println!("{}", result.message);
+            success(&result.message);
             Ok(())
         }
         Commands::Erase {
@@ -147,7 +165,7 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
                 EraseMethod::WriteZero
             };
             let result = client.erase(&partition, true, erase_method).await?;
-            println!("{}", result.message);
+            success(&result.message);
             Ok(())
         }
         Commands::Flash {
@@ -166,13 +184,13 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             let result = client
                 .flash(&rawprogram, patch.as_deref(), &image_dir, erase_method)
                 .await?;
-            println!("{}", result.message);
+            success(&result.message);
             Ok(())
         }
         Commands::Verify { partition, file } => {
             client.init().await?;
             let result = client.verify(&partition, &file).await?;
-            println!("{}", result.message);
+            success(&result.message);
             Ok(())
         }
     }
