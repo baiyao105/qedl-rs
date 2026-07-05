@@ -506,6 +506,45 @@ impl FirehoseClient {
         self.execute_command(transport, &FirehoseCommand::GetStorageInfo).await
     }
 
+    /// Get SHA256 digest of partition sectors from device.
+    /// Returns the hex-encoded SHA256 hash string.
+    pub async fn get_sha256_digest(
+        &mut self,
+        transport: &mut dyn Transport,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<String> {
+        let cmd = FirehoseCommand::GetSha256Digest {
+            sector_size: self.sector_size,
+            num_sectors,
+            physical_partition,
+            start_sector,
+        };
+        let resp = self.execute_command(transport, &cmd).await?;
+        if !resp.is_ack() {
+            return Err(FirehoseError::Nak {
+                command: "getsha256digest".to_string(),
+                reason: resp.error.unwrap_or_else(|| "unknown".to_string()),
+            });
+        }
+        // The digest is returned in the log messages
+        // Format: "Digest: <hex_string>" or just the hex string
+        for log in &resp.logs {
+            if let Some(idx) = log.find("Digest ") {
+                return Ok(log[idx + 7..].to_string());
+            }
+            // Some implementations just return the hash directly
+            if log.len() == 64 && log.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Ok(log.clone());
+            }
+        }
+        // If no digest found in logs, return the last log entry (some devices return it that way)
+        resp.logs.last().cloned().ok_or_else(|| FirehoseError::InvalidResponse {
+            reason: "No digest in response".to_string(),
+        })
+    }
+
     /// Read memory at physical address. Returns raw bytes.
     pub async fn peek(&mut self, transport: &mut dyn Transport, address: u64, size: u32) -> Result<Vec<u8>> {
         let cmd = FirehoseCommand::Peek { address, size };

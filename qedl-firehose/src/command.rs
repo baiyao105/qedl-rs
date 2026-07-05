@@ -33,6 +33,13 @@ pub enum FirehoseCommand {
         start_sector: u64,
     },
     GetStorageInfo,
+    /// Get SHA256 digest of partition sectors from device
+    GetSha256Digest {
+        sector_size: u32,
+        num_sectors: u64,
+        physical_partition: u8,
+        start_sector: u64,
+    },
     /// Read memory at physical address
     Peek {
         address: u64,
@@ -90,6 +97,17 @@ impl FirehoseCommand {
                 )
             }
             Self::GetStorageInfo => "getstorageinfo".to_string(),
+            Self::GetSha256Digest {
+                physical_partition,
+                start_sector,
+                num_sectors,
+                ..
+            } => {
+                format!(
+                    "getsha256digest(lun={}, start={}, count={})",
+                    physical_partition, start_sector, num_sectors
+                )
+            }
             Self::Peek { address, size } => format!("peek(addr=0x{:X}, size={})", address, size),
             Self::Poke { address, data } => format!("poke(addr=0x{:X}, len={})", address, data.len()),
             Self::Power { value } => format!("power({})", value),
@@ -152,6 +170,17 @@ impl FirehoseCommand {
                 )
             }
             Self::GetStorageInfo => "<getstorageinfo />".to_string(),
+            Self::GetSha256Digest {
+                sector_size,
+                num_sectors,
+                physical_partition,
+                start_sector,
+            } => {
+                format!(
+                    r#"<getsha256digest SECTOR_SIZE_IN_BYTES="{}" num_partition_sectors="{}" physical_partition_number="{}" start_sector="{}" />"#,
+                    sector_size, num_sectors, physical_partition, start_sector
+                )
+            }
             Self::Peek { address, size } => {
                 format!(r#"<peek address64="{:#x}" size_in_bytes="{}" />"#, address, size)
             }

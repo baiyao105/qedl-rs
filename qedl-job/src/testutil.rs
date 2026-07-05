@@ -19,6 +19,7 @@ pub struct MockJobContext {
     pub xml_responses: Vec<XmlResponse>,
     pub xml_index: usize,
     pub storage_info_response: Option<std::result::Result<Vec<String>, String>>,
+    pub sha256_response: Option<std::result::Result<String, String>>,
 }
 
 impl MockJobContext {
@@ -47,6 +48,7 @@ impl MockJobContext {
             xml_responses: vec![],
             xml_index: 0,
             storage_info_response: None,
+            sha256_response: None,
         }
     }
 
@@ -144,6 +146,19 @@ impl JobContext for MockJobContext {
             Some(Ok(logs)) => Ok(logs.clone()),
             Some(Err(e)) => Err(crate::error::JobError::PreconditionFailed { reason: e.clone() }),
             None => Ok(vec![]),
+        }
+    }
+
+    async fn get_sha256_digest(
+        &mut self,
+        _physical_partition: u8,
+        _start_sector: u64,
+        _num_sectors: u64,
+    ) -> Result<String> {
+        match &self.sha256_response {
+            Some(Ok(digest)) => Ok(digest.clone()),
+            Some(Err(e)) => Err(crate::error::JobError::PreconditionFailed { reason: e.clone() }),
+            None => Ok("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
         }
     }
 

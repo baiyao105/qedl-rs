@@ -822,6 +822,7 @@ dependencies = [
  "md-5",
  "qedl-core",
  "quick-xml",
+ "sha2",
  "thiserror",
 ]
 
@@ -833,7 +834,6 @@ dependencies = [
  "bytes",
  "hex",
  "indicatif",
- "md-5",
  "qedl-core",
  "qedl-firehose",
  "qedl-image",

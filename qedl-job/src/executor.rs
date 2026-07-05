@@ -693,6 +693,24 @@ impl JobContext for JobExecutor {
         Ok(resp.logs)
     }
 
+    async fn get_sha256_digest(
+        &mut self,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<String> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+        self.firehose
+            .get_sha256_digest(transport.as_mut(), physical_partition, start_sector, num_sectors)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn erase_sectors_native(
         &mut self,
         physical_partition: u8,

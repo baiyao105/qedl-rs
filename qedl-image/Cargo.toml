@@ -11,6 +11,7 @@ qedl-core.workspace = true
 quick-xml.workspace = true
 thiserror.workspace = true
 md-5.workspace = true
+sha2.workspace = true
 crc32fast.workspace = true
 hex.workspace = true
 bytes.workspace = true

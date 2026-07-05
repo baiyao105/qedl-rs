@@ -82,6 +82,14 @@ pub trait JobContext: Send + Sync {
 
     async fn refresh_storage_info(&mut self) -> Result<Vec<String>>;
 
+    /// Get SHA256 digest of partition sectors from device.
+    async fn get_sha256_digest(
+        &mut self,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<String>;
+
     fn progress(&self) -> &dyn ProgressReporter;
 
     fn session(&self) -> Option<&Session>;

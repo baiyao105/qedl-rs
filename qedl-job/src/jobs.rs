@@ -2,8 +2,6 @@ use crate::context::JobContext;
 use crate::error::Result;
 use async_trait::async_trait;
 use indicatif::{ProgressBar, ProgressStyle};
-#[cfg(feature = "sparse")]
-use md5::Digest;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -818,7 +816,6 @@ impl Job for VerifyJob {
 
         let image_len = image_data.len() as u64;
         let sectors_to_read = image_len.div_ceil(sector_size);
-        let verify_bytes = sectors_to_read * sector_size;
 
         tracing::info!(
             "Verifying {} image ({} bytes, {} sectors) against partition '{}'",
@@ -828,68 +825,36 @@ impl Job for VerifyJob {
             self.partition_name
         );
 
-        let local_md5 = checksum::compute_md5(&image_data);
-        tracing::info!("Local image MD5: {}", local_md5);
-
-        let max_payload = ctx.max_payload_size() as u64;
-        let sectors_per_chunk = (max_payload / sector_size).max(1);
-
-        let mut sector = first_lba;
-        let mut remaining = sectors_to_read;
-        let mut hasher = md5::Md5::new();
+        // Compute local SHA256
+        let local_sha256 = checksum::compute_sha256(&image_data);
+        tracing::info!("Local image SHA256: {}", local_sha256);
 
         let start_time = Instant::now();
-        let pb = if self.show_progress {
-            let style = ProgressStyle::default_bar()
-                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
-                .expect("valid progress template")
-                .progress_chars("#>-");
-            let pb = ProgressBar::new(verify_bytes);
-            pb.set_style(style);
-            Some(pb)
-        } else {
-            None
-        };
 
-        while remaining > 0 {
-            let chunk = remaining.min(sectors_per_chunk);
-            let data = ctx.read_sectors(physical_partition, sector, chunk).await?;
+        // Get SHA256 digest from device
+        tracing::info!("Requesting SHA256 digest from device...");
+        let device_sha256 = ctx
+            .get_sha256_digest(physical_partition, first_lba, sectors_to_read)
+            .await?;
 
-            hasher.update(&data);
-            let bytes_read = chunk * sector_size;
-            if let Some(ref pb) = pb {
-                pb.inc(bytes_read);
-            }
+        tracing::info!("Device SHA256:     {}", device_sha256);
 
-            sector += chunk;
-            remaining -= chunk;
-        }
-
-        if let Some(pb) = pb {
-            pb.finish_with_message("done");
-        }
-
-        let partition_hash = hasher.finalize();
-        let partition_md5 = hex::encode(partition_hash);
-
-        tracing::info!("Partition MD5: {}", partition_md5);
-
-        if partition_md5 == local_md5 {
-            tracing::info!("Verification SUCCESS: MD5 matches!");
+        if local_sha256 == device_sha256 {
+            tracing::info!("Verification SUCCESS: SHA256 matches!");
             Ok(JobResult {
                 success: true,
                 message: format!(
-                    "Verification passed! MD5: {} ({} bytes, took {:.2}s)",
-                    partition_md5,
+                    "Verification passed! SHA256: {} ({} bytes, took {:.2}s)",
+                    device_sha256,
                     image_len,
                     start_time.elapsed().as_secs_f64()
                 ),
                 steps_completed: 1,
             })
         } else {
-            tracing::error!("Verification FAILED! MD5 mismatch");
+            tracing::error!("Verification FAILED! SHA256 mismatch");
             Err(crate::error::JobError::PreconditionFailed {
-                reason: format!("MD5 mismatch: local = {}, device = {}", local_md5, partition_md5),
+                reason: format!("SHA256 mismatch: local = {}, device = {}", local_sha256, device_sha256),
             })
         }
     }
