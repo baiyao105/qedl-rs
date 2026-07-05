@@ -26,6 +26,9 @@ pub enum SaharaError {
     #[error("device is already in Firehose mode, not Sahara")]
     AlreadyInFirehose,
 
+    #[error("device not in Firehose mode, use --loader to specify Sahara loader")]
+    NotInFirehose,
+
     #[error("transport error: {0}")]
     Transport(#[from] qedl_transport::TransportError),
 
@@ -46,6 +49,7 @@ impl From<SaharaError> for qedl_core::QedlError {
             SaharaError::ImageAuthFailed { .. } => qedl_core::ErrorCode::SaharaImageAuthFailed,
             SaharaError::VersionMismatch { .. } => qedl_core::ErrorCode::SaharaVersionMismatch,
             SaharaError::AlreadyInFirehose => qedl_core::ErrorCode::SaharaHelloFailed,
+            SaharaError::NotInFirehose => qedl_core::ErrorCode::SaharaHelloFailed,
             SaharaError::Transport(_) => qedl_core::ErrorCode::TransportIo,
             SaharaError::Io(_) => qedl_core::ErrorCode::TransportIo,
         };

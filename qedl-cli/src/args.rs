@@ -30,6 +30,7 @@ pub struct GlobalArgs {
     #[arg(long, global = true)]
     pub serial: Option<String>,
 
+    /// Sahara loader 文件路径（可选：未指定时假设设备已在 Firehose 模式）
     #[arg(long, global = true, value_name = "FILE")]
     pub loader: Option<PathBuf>,
 

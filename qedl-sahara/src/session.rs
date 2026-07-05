@@ -69,7 +69,7 @@ impl<T: Transport> SaharaSession<T> {
     /// Consumes self and returns (transport, device_info) on success.
     pub async fn handshake(
         mut self,
-        loader_path: &Path,
+        loader_path: Option<&Path>,
         mode: SaharaMode,
     ) -> std::result::Result<(T, SaharaDeviceInfo), SaharaError> {
         tracing::info!("Sahara handshake started");
@@ -90,6 +90,11 @@ impl<T: Transport> SaharaSession<T> {
                     tracing::info!("Device is in Firehose mode (NOP ACK received)");
                     self.emit(SaharaEvent::AlreadyInFirehoseMode);
                     return Ok((self.transport, SaharaDeviceInfo::default()));
+                }
+                // No loader specified — cannot proceed with Sahara
+                if loader_path.is_none() {
+                    tracing::info!("No loader specified and device not in Firehose mode");
+                    return Err(SaharaError::NotInFirehose);
                 }
                 tracing::debug!("NOP failed, trying PblHack recovery");
                 self.pbl_hack(mode).await?;
@@ -134,6 +139,9 @@ impl<T: Transport> SaharaSession<T> {
                 Err(e) => tracing::trace!("get_serial_num failed: {}", e),
             }
         }
+
+        // loader_path is guaranteed Some here (None returns early above)
+        let loader_path = loader_path.unwrap();
 
         tracing::debug!(path = ?loader_path, "Loading Sahara loader");
         let loader_data = Bytes::from(std::fs::read(loader_path).map_err(|e| SaharaError::TransferFailed {

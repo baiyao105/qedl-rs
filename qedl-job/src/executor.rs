@@ -286,14 +286,6 @@ impl JobExecutor {
     }
 
     pub async fn handshake(&mut self) -> Result<()> {
-        let loader_path = self
-            .config
-            .loader
-            .as_ref()
-            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
-                reason: "no loader specified (--loader)".to_string(),
-            })?;
-
         let device = self
             .device
             .as_ref()
@@ -307,7 +299,7 @@ impl JobExecutor {
         tracing::info!("Starting Sahara handshake");
         let sahara = SaharaSession::new(transport).with_event_sink(self.config.event_sink.clone());
         match sahara
-            .handshake(loader_path, qedl_sahara::SaharaMode::ImageTransfer)
+            .handshake(self.config.loader.as_deref(), qedl_sahara::SaharaMode::ImageTransfer)
             .await
         {
             Ok((transport, sahara_info)) => {
