@@ -200,7 +200,7 @@ impl JobExecutor {
             DeviceEnumerator::auto_select()?
         };
 
-        tracing::info!("Device found: {} (PID=0x{:04X})", device, device.pid);
+        tracing::info!("Device: {} (PID=0x{:04X})", device, device.pid);
 
         if device.is_diag() {
             if !self.config.auto_edl_switch {

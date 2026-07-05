@@ -142,10 +142,6 @@ pub struct DeviceEnumerator;
 
 impl DeviceEnumerator {
     pub fn list() -> Result<Vec<DeviceInfo>> {
-        tracing::debug!(
-            "Scanning serial ports for Qualcomm devices (VID=0x{:04X})...",
-            QUALCOMM_VID
-        );
         let ports = serialport::available_ports().map_err(serialport_error_to_io)?;
 
         let mut devices = Vec::new();
@@ -182,10 +178,8 @@ impl DeviceEnumerator {
                 description,
                 mode,
             };
-            tracing::debug!("Found Qualcomm device: {} (PID=0x{:04X}, mode={:?})", info, pid, mode);
             devices.push(info);
         }
-        tracing::debug!("Scan complete: {} Qualcomm device(s) found", devices.len());
         Ok(devices)
     }
 
