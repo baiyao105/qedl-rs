@@ -29,7 +29,11 @@ impl std::str::FromStr for FirehoseFunction {
 pub struct FirehoseInfo {
     pub sector_size: u32,
     pub max_payload_size: u32,
+    pub max_payload_size_from_target: Option<u32>,
+    pub max_payload_size_to_target_supported: Option<u32>,
     pub max_xml_size: Option<u32>,
+    pub target_name: Option<String>,
+    pub version: Option<String>,
     pub supported_functions: Vec<FirehoseFunction>,
 }
 
@@ -38,7 +42,11 @@ impl Default for FirehoseInfo {
         Self {
             sector_size: 512,
             max_payload_size: 1024 * 1024,
+            max_payload_size_from_target: None,
+            max_payload_size_to_target_supported: None,
             max_xml_size: None,
+            target_name: None,
+            version: None,
             supported_functions: Vec::new(),
         }
     }

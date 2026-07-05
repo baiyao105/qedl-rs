@@ -1,7 +1,7 @@
 use crate::error::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use qedl_core::{PartitionInfo, ProgressReporter};
+use qedl_core::{PartitionInfo, ProgressReporter, Session};
 
 #[derive(Debug, Clone)]
 pub struct XmlResponse {
@@ -83,4 +83,6 @@ pub trait JobContext: Send + Sync {
     async fn refresh_storage_info(&mut self) -> Result<Vec<String>>;
 
     fn progress(&self) -> &dyn ProgressReporter;
+
+    fn session(&self) -> Option<&Session>;
 }

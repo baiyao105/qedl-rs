@@ -52,6 +52,12 @@ pub const PROTOCOL_VERSION: u32 = 2;
 pub const PROTOCOL_VERSION_MIN: u32 = 2;
 pub const DEFAULT_CHUNK_SIZE: usize = 64 * 1024;
 
+/// Sahara exec command IDs
+pub mod exec_cmd {
+    pub const SERIAL_NUM_READ: u32 = 0x01;
+    pub const MSM_HW_ID_READ: u32 = 0x02;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum SaharaMode {

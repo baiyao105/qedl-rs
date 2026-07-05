@@ -13,8 +13,12 @@ pub struct FirehoseClient {
     pub memory_name: String,
     pub sector_size: u32,
     pub max_payload_size: u32,
-    pub total_sectors: u64,
+    pub max_payload_size_from_target: Option<u32>,
+    pub max_payload_size_to_target_supported: Option<u32>,
+    pub max_xml_size: Option<u32>,
     pub target_name: String,
+    pub version: Option<String>,
+    pub total_sectors: u64,
     initialized: bool,
     /// Buffer for leftover bytes from read_response that belong to raw data, not XML
     leftover: BytesMut,
@@ -29,8 +33,12 @@ impl FirehoseClient {
             memory_name: "eMMC".to_string(),
             sector_size: 512,
             max_payload_size: 1024 * 1024,
-            total_sectors: 0,
+            max_payload_size_from_target: None,
+            max_payload_size_to_target_supported: None,
+            max_xml_size: None,
             target_name: "unknown".to_string(),
+            version: None,
+            total_sectors: 0,
             initialized: false,
             leftover: BytesMut::new(),
             read_buf: vec![0u8; READ_BUF_SIZE],
@@ -73,6 +81,21 @@ impl FirehoseClient {
         if let Some(mps) = resp.max_payload_size {
             self.max_payload_size = mps;
         }
+        if let Some(mpsft) = resp.max_payload_size_from_target {
+            self.max_payload_size_from_target = Some(mpsft);
+        }
+        if let Some(mpstts) = resp.max_payload_size_to_target_supported {
+            self.max_payload_size_to_target_supported = Some(mpstts);
+        }
+        if let Some(mxs) = resp.max_xml_size {
+            self.max_xml_size = Some(mxs);
+        }
+        if let Some(ts) = resp.target_name {
+            self.target_name = ts;
+        }
+        if let Some(v) = resp.version {
+            self.version = Some(v);
+        }
         if let Some(ts) = resp.total_sectors {
             self.total_sectors = ts;
         }
@@ -80,11 +103,15 @@ impl FirehoseClient {
         self.initialized = true;
         self.emit(FirehoseEvent::ConfigureComplete);
         tracing::info!(
-            "Firehose Configured: Memory={}, SectorSize={}, MaxPayload={}, TotalSectors={}",
+            "Firehose Configured: TargetName={}, Memory={}, SectorSize={}, MaxPayload={}, MaxPayloadFromTarget={}, MaxPayloadSupported={}, MaxXML={}, Version={}",
+            self.target_name,
             self.memory_name,
             self.sector_size,
             self.max_payload_size,
-            self.total_sectors
+            self.max_payload_size_from_target.map_or("N/A".to_string(), |v| v.to_string()),
+            self.max_payload_size_to_target_supported.map_or("N/A".to_string(), |v| v.to_string()),
+            self.max_xml_size.map_or("N/A".to_string(), |v| v.to_string()),
+            self.version.as_deref().unwrap_or("N/A"),
         );
         Ok(())
     }

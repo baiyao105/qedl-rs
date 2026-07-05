@@ -290,8 +290,13 @@ impl JobExecutor {
             .handshake(loader_path, qedl_sahara::SaharaMode::ImageTransfer)
             .await
         {
-            Ok(transport) => {
+            Ok((transport, sahara_info)) => {
                 tracing::info!("Sahara handshake complete, device in Firehose mode");
+                // Store Sahara device info in session
+                if let Some(ref mut session) = self.session {
+                    session.msm_hw_id = sahara_info.msm_hw_id;
+                    session.serial_num = sahara_info.serial_num;
+                }
                 self.transport = Some(Box::new(transport));
                 self.state = DeviceState::Ready;
             }
@@ -339,6 +344,11 @@ impl JobExecutor {
         if let Some(ref mut session) = self.session {
             session.firehose.sector_size = self.firehose.sector_size;
             session.firehose.max_payload_size = self.firehose.max_payload_size;
+            session.firehose.max_payload_size_from_target = self.firehose.max_payload_size_from_target;
+            session.firehose.max_payload_size_to_target_supported = self.firehose.max_payload_size_to_target_supported;
+            session.firehose.max_xml_size = self.firehose.max_xml_size;
+            session.firehose.target_name = Some(self.firehose.target_name.clone());
+            session.firehose.version = self.firehose.version.clone();
             session.capabilities.memory_type = self.firehose.memory_name.clone();
             session.capabilities.total_sectors = self.firehose.total_sectors;
         }
@@ -683,6 +693,10 @@ impl JobContext for JobExecutor {
     fn progress(&self) -> &dyn ProgressReporter {
         static NOOP: NoopProgress = NoopProgress;
         &NOOP
+    }
+
+    fn session(&self) -> Option<&Session> {
+        self.session.as_ref()
     }
 }
 

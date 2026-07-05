@@ -2,7 +2,7 @@ use crate::context::{JobContext, XmlResponse};
 use crate::error::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use qedl_core::{NoopProgress, PartitionInfo, ProgressReporter};
+use qedl_core::{NoopProgress, PartitionInfo, ProgressReporter, Session};
 use std::collections::HashMap;
 
 pub struct MockJobContext {
@@ -164,5 +164,9 @@ impl JobContext for MockJobContext {
 
     fn progress(&self) -> &dyn ProgressReporter {
         &NoopProgress
+    }
+
+    fn session(&self) -> Option<&Session> {
+        None
     }
 }

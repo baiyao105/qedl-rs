@@ -647,6 +647,28 @@ impl Job for InfoJob {
             ctx.all_partitions().len(),
         );
 
+        // Add Sahara device info if available
+        if let Some(session) = ctx.session() {
+            if let Some(ref msm_id) = session.msm_hw_id {
+                let hex_str: Vec<String> = msm_id.iter().map(|b| format!("{:02X}", b)).collect();
+                msg.push_str(&format!("\nMSM HW ID:     {}", hex_str.join("")));
+                // Try to extract SOC_HW_VERSION (first 4 bytes LE)
+                if msm_id.len() >= 4 {
+                    let soc_hw_ver = u32::from_le_bytes([msm_id[0], msm_id[1], msm_id[2], msm_id[3]]);
+                    msg.push_str(&format!("\nSOC HW Ver:    0x{:08X}", soc_hw_ver));
+                }
+            }
+            if let Some(serial) = session.serial_num {
+                msg.push_str(&format!("\nSerial:        0x{:016X}", serial));
+            }
+            if let Some(ref target) = session.firehose.target_name {
+                msg.push_str(&format!("\nTarget:        {}", target));
+            }
+            if let Some(ref version) = session.firehose.version {
+                msg.push_str(&format!("\nFH Version:    {}", version));
+            }
+        }
+
         for log_entry in &extra_logs {
             if !log_entry.starts_with("Error") {
                 msg.push_str(&format!("\n  {}", log_entry));

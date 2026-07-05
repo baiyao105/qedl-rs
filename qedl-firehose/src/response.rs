@@ -11,6 +11,11 @@ pub struct FirehoseResponse {
     pub memory_name: Option<String>,
     pub sector_size: Option<u32>,
     pub max_payload_size: Option<u32>,
+    pub max_payload_size_from_target: Option<u32>,
+    pub max_payload_size_to_target_supported: Option<u32>,
+    pub max_xml_size: Option<u32>,
+    pub target_name: Option<String>,
+    pub version: Option<String>,
     pub total_sectors: Option<u64>,
     pub num_partition_sectors: Option<u64>,
     pub physical_partition_number: Option<u8>,
@@ -35,6 +40,11 @@ impl FirehoseResponse {
         let mut memory_name: Option<String> = None;
         let mut sector_size: Option<u32> = None;
         let mut max_payload_size: Option<u32> = None;
+        let mut max_payload_size_from_target: Option<u32> = None;
+        let mut max_payload_size_to_target_supported: Option<u32> = None;
+        let mut max_xml_size: Option<u32> = None;
+        let mut target_name: Option<String> = None;
+        let mut version: Option<String> = None;
         let mut total_sectors: Option<u64> = None;
         let mut num_partition_sectors: Option<u64> = None;
         let mut physical_partition_number: Option<u8> = None;
@@ -88,6 +98,22 @@ impl FirehoseResponse {
                             .or_else(|| get_attr_u32(e, "max_payload_size"))
                             .or_else(|| get_attr_u32(e, "MaxPayloadSize"));
                     }
+                    if max_payload_size_from_target.is_none() {
+                        max_payload_size_from_target = get_attr_u32(e, "MaxPayloadSizeFromTargetInBytes");
+                    }
+                    if max_payload_size_to_target_supported.is_none() {
+                        max_payload_size_to_target_supported =
+                            get_attr_u32(e, "MaxPayloadSizeToTargetInBytesSupported");
+                    }
+                    if max_xml_size.is_none() {
+                        max_xml_size = get_attr_u32(e, "MaxXMLSizeInBytes");
+                    }
+                    if target_name.is_none() {
+                        target_name = get_attr(e, "TargetName");
+                    }
+                    if version.is_none() {
+                        version = get_attr(e, "Version");
+                    }
                     if total_sectors.is_none() {
                         total_sectors = get_attr_u64(e, "total_sectors")
                             .or_else(|| get_attr_u64(e, "TotalSectors"))
@@ -136,6 +162,11 @@ impl FirehoseResponse {
             memory_name,
             sector_size,
             max_payload_size,
+            max_payload_size_from_target,
+            max_payload_size_to_target_supported,
+            max_xml_size,
+            target_name,
+            version,
             total_sectors,
             num_partition_sectors,
             physical_partition_number,
