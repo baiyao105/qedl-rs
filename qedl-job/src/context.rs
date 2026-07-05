@@ -93,4 +93,20 @@ pub trait JobContext: Send + Sync {
     fn progress(&self) -> &dyn ProgressReporter;
 
     fn session(&self) -> Option<&Session>;
+
+    /// Show a temporary spinner with the given message. Returns an opaque handle.
+    /// The spinner is automatically hidden when the handle is dropped.
+    fn show_spinner(&self, _message: &str) -> Box<dyn SpinnerHandle + Send> {
+        Box::new(NoopSpinner)
+    }
+}
+
+/// Handle for a temporary spinner. Drop to hide.
+pub trait SpinnerHandle: Send {
+    fn finish(&self);
+}
+
+struct NoopSpinner;
+impl SpinnerHandle for NoopSpinner {
+    fn finish(&self) {}
 }

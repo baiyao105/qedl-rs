@@ -242,6 +242,7 @@ pub struct QedlClientBuilder {
     max_retries: u32,
     event_sink: Option<Arc<dyn qedl_core::EventSink>>,
     auto_edl_switch: bool,
+    spinner_factory: Option<qedl_job::SpinnerFactory>,
 }
 
 impl QedlClientBuilder {
@@ -257,6 +258,7 @@ impl QedlClientBuilder {
             max_retries: 3,
             event_sink: None,
             auto_edl_switch: true,
+            spinner_factory: None,
         }
     }
 
@@ -314,6 +316,15 @@ impl QedlClientBuilder {
         self
     }
 
+    /// Sets the spinner factory for creating temporary spinners during long operations.
+    pub fn spinner_factory(
+        mut self,
+        factory: impl Fn(&str) -> Box<dyn qedl_job::context::SpinnerHandle + Send> + Send + Sync + 'static,
+    ) -> Self {
+        self.spinner_factory = Some(Arc::new(factory));
+        self
+    }
+
     /// Builds and returns the configured `QedlClient`.
     pub fn build(self) -> QedlClient {
         let config = ExecutorConfig {
@@ -326,6 +337,7 @@ impl QedlClientBuilder {
             max_retries: self.max_retries,
             event_sink: self.event_sink,
             auto_edl_switch: self.auto_edl_switch,
+            spinner_factory: self.spinner_factory,
         };
 
         QedlClient::from_config(config)

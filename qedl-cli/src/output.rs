@@ -1,6 +1,47 @@
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use owo_colors::OwoColorize;
+use std::io::Write;
 
 const DIVIDER: &str = "────────────────────────────────────────";
+
+/// A simple spinner for showing temporary progress during device operations.
+/// Writes to stdout to avoid conflicts with tracing (which writes to stderr).
+/// The spinner auto-clears when dropped, so logs remain unaffected.
+pub struct Spinner {
+    pb: ProgressBar,
+}
+
+impl Spinner {
+    /// Create a new spinner with a message, writing to stdout
+    pub fn new(message: &str) -> Self {
+        // Write to stdout so it doesn't conflict with tracing on stderr
+        let pb = ProgressBar::with_draw_target(None, ProgressDrawTarget::stdout_with_hz(120));
+        pb.set_style(
+            ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                .unwrap()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        );
+        pb.set_message(message.to_string());
+        pb.enable_steady_tick(std::time::Duration::from_millis(80));
+        Self { pb }
+    }
+}
+
+impl qedl::SpinnerHandle for Spinner {
+    fn finish(&self) {
+        self.pb.finish_and_clear();
+        let _ = std::io::stdout().flush();
+    }
+}
+
+impl Drop for Spinner {
+    fn drop(&mut self) {
+        if !self.pb.is_finished() {
+            self.pb.finish_and_clear();
+            let _ = std::io::stdout().flush();
+        }
+    }
+}
 
 /// Print a success message
 pub fn success(msg: &str) {
@@ -8,8 +49,9 @@ pub fn success(msg: &str) {
 }
 
 /// Print an error message
+#[allow(dead_code)]
 pub fn error(msg: &str) {
-    eprintln!("{} {}", "[FAIL]".red().bold(), msg);
+    println!("{} {}", "[FAIL]".red().bold(), msg);
 }
 
 /// Print an info message

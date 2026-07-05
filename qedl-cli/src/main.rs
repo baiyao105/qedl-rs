@@ -3,6 +3,7 @@ mod output;
 
 use args::{Cli, Commands};
 use clap::Parser;
+use output::Spinner;
 use output::*;
 use owo_colors::OwoColorize;
 use qedl::EraseMethod;
@@ -40,10 +41,12 @@ async fn main() -> color_eyre::Result<()> {
 
     if let Some(wait_secs) = cli.global.wait_device {
         let timeout = if wait_secs == 0 { None } else { Some(wait_secs) };
+        let spinner = Spinner::new("Waiting for device...");
         match DeviceEnumerator::wait_for_device(cli.global.port.as_deref(), cli.global.serial.as_deref(), timeout, 1000)
         {
-            Ok(device) => tracing::info!("Device found after waiting: {}", device),
+            Ok(_device) => { /* spinner will be dropped, logs already printed */ }
             Err(e) => {
+                drop(spinner);
                 let msg = format!("{}", e);
                 error(&msg);
                 process::exit(if msg.contains("not found") { 2 } else { 1 });
@@ -55,7 +58,8 @@ async fn main() -> color_eyre::Result<()> {
         .timeout(std::time::Duration::from_millis(cli.global.timeout))
         .dry_run(cli.global.dry_run)
         .verbose(cli.global.verbose > 0)
-        .auto_edl_switch(!cli.global.no_switch_edl);
+        .auto_edl_switch(!cli.global.no_switch_edl)
+        .spinner_factory(|msg| Box::new(Spinner::new(msg)));
 
     if let Some(ref port) = cli.global.port {
         builder = builder.port(port.as_str());
@@ -81,7 +85,9 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             Ok(())
         }
         Commands::Info => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init().await?;
+            drop(spinner);
             let result = client.info().await?;
             header("Storage Info");
             for line in result.message.lines() {
@@ -94,7 +100,9 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             Ok(())
         }
         Commands::Gpt => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init().await?;
+            drop(spinner);
             let result = client.gpt().await?;
             header("Partition Table");
             for line in result.message.lines() {
@@ -114,13 +122,17 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             Ok(())
         }
         Commands::Reboot => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init_firehose_only().await?;
+            drop(spinner);
             client.reboot().await?;
             success("Device rebooting...");
             Ok(())
         }
         Commands::Xml { xml, file } => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init_firehose_only().await?;
+            drop(spinner);
             let xml_content = resolve_xml_input(xml, file)?;
             let result = client.raw_xml(&xml_content).await?;
             xml_response(result.success, &result.message);
@@ -139,7 +151,9 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             file,
             resume,
         } => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init().await?;
+            drop(spinner);
             let result = if resume {
                 client.dump_resume(&partition, &file).await?
             } else {
@@ -149,7 +163,9 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             Ok(())
         }
         Commands::Write { partition, file } => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init().await?;
+            drop(spinner);
             let result = client.write(&partition, &file).await?;
             success(&result.message);
             Ok(())
@@ -158,7 +174,9 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             partition,
             native_erase,
         } => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init().await?;
+            drop(spinner);
             let erase_method = if native_erase {
                 EraseMethod::Native
             } else {
@@ -174,7 +192,9 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             image_dir,
             native_erase,
         } => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init().await?;
+            drop(spinner);
             let image_dir = image_dir.unwrap_or_else(|| ".".into());
             let erase_method = if native_erase {
                 EraseMethod::Native
@@ -188,13 +208,17 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             Ok(())
         }
         Commands::Verify { partition, file } => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init().await?;
+            drop(spinner);
             let result = client.verify(&partition, &file).await?;
             success(&result.message);
             Ok(())
         }
         Commands::Peek { address, size, output } => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init_firehose_only().await?;
+            drop(spinner);
             let addr = parse_hex_or_decimal(&address)?;
             let data = client.peek(addr, size).await?;
             if let Some(path) = output {
@@ -208,7 +232,9 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             Ok(())
         }
         Commands::Poke { address, data } => {
+            let spinner = Spinner::new("Connecting to device...");
             client.init_firehose_only().await?;
+            drop(spinner);
             let addr = parse_hex_or_decimal(&address)?;
             let bytes = parse_hex_data(&data)?;
             client.poke(addr, &bytes).await?;

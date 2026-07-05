@@ -14,6 +14,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Factory for creating spinner handles. The CLI provides this to show spinners during long operations.
+pub type SpinnerFactory = Arc<dyn Fn(&str) -> Box<dyn crate::context::SpinnerHandle + Send> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct ExecutorConfig {
     pub port: Option<String>,
@@ -25,6 +28,7 @@ pub struct ExecutorConfig {
     pub max_retries: u32,
     pub event_sink: Option<Arc<dyn EventSink>>,
     pub auto_edl_switch: bool,
+    pub spinner_factory: Option<SpinnerFactory>,
 }
 
 impl Default for ExecutorConfig {
@@ -39,6 +43,7 @@ impl Default for ExecutorConfig {
             max_retries: 3,
             event_sink: None,
             auto_edl_switch: true,
+            spinner_factory: None,
         }
     }
 }
@@ -55,6 +60,10 @@ impl std::fmt::Debug for ExecutorConfig {
             .field("max_retries", &self.max_retries)
             .field("event_sink", &self.event_sink.as_ref().map(|_| "<EventSink>"))
             .field("auto_edl_switch", &self.auto_edl_switch)
+            .field(
+                "spinner_factory",
+                &self.spinner_factory.as_ref().map(|_| "<SpinnerFactory>"),
+            )
             .finish()
     }
 }
@@ -75,6 +84,7 @@ pub struct ExecutorConfigBuilder {
     max_retries: u32,
     event_sink: Option<Arc<dyn EventSink>>,
     auto_edl_switch: bool,
+    spinner_factory: Option<SpinnerFactory>,
 }
 
 impl ExecutorConfigBuilder {
@@ -89,6 +99,7 @@ impl ExecutorConfigBuilder {
             max_retries: 3,
             event_sink: None,
             auto_edl_switch: true,
+            spinner_factory: None,
         }
     }
 
@@ -137,6 +148,14 @@ impl ExecutorConfigBuilder {
         self
     }
 
+    pub fn spinner_factory(
+        mut self,
+        factory: impl Fn(&str) -> Box<dyn crate::context::SpinnerHandle + Send> + Send + Sync + 'static,
+    ) -> Self {
+        self.spinner_factory = Some(Arc::new(factory));
+        self
+    }
+
     pub fn build(self) -> ExecutorConfig {
         ExecutorConfig {
             port: self.port,
@@ -148,6 +167,7 @@ impl ExecutorConfigBuilder {
             max_retries: self.max_retries,
             event_sink: self.event_sink,
             auto_edl_switch: self.auto_edl_switch,
+            spinner_factory: self.spinner_factory,
         }
     }
 }
@@ -737,6 +757,19 @@ impl JobContext for JobExecutor {
     fn session(&self) -> Option<&Session> {
         self.session.as_ref()
     }
+
+    fn show_spinner(&self, message: &str) -> Box<dyn crate::context::SpinnerHandle + Send> {
+        if let Some(ref factory) = self.config.spinner_factory {
+            factory(message)
+        } else {
+            Box::new(NoopSpinner)
+        }
+    }
+}
+
+struct NoopSpinner;
+impl crate::context::SpinnerHandle for NoopSpinner {
+    fn finish(&self) {}
 }
 
 async fn read_gpt_for_lun(

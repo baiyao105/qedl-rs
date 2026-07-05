@@ -1,7 +1,7 @@
 use crate::context::JobContext;
 use crate::error::Result;
 use async_trait::async_trait;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -112,7 +112,7 @@ impl Job for DumpJob {
                 .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
                 .expect("valid progress template")
                 .progress_chars("#>-");
-            let pb = ProgressBar::new(total_bytes).with_style(style);
+            let pb = ProgressBar::with_draw_target(Some(total_bytes), ProgressDrawTarget::stdout()).with_style(style);
             pb.set_position(dumped_bytes);
             Some(pb)
         } else {
@@ -221,7 +221,8 @@ impl Job for WriteJob {
                     )
                     .expect("valid progress template")
                     .progress_chars("#>-");
-                let pb = ProgressBar::new(total_bytes).with_style(style);
+                let pb =
+                    ProgressBar::with_draw_target(Some(total_bytes), ProgressDrawTarget::stdout()).with_style(style);
 
                 let mut chunk_buffer = Vec::with_capacity(sectors_per_chunk as usize * sector_size as usize);
 
@@ -283,7 +284,7 @@ impl Job for WriteJob {
                 .template("[{elapsed_precise}] [{bar:40.green/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
                 .expect("valid progress template")
                 .progress_chars("#>-");
-            let pb = ProgressBar::new(total_bytes).with_style(style);
+            let pb = ProgressBar::with_draw_target(Some(total_bytes), ProgressDrawTarget::stdout()).with_style(style);
 
             let mut chunk_buffer = vec![0u8; chunk_size];
 
@@ -380,7 +381,8 @@ impl Job for EraseJob {
                         )
                         .expect("valid progress template")
                         .progress_chars("#>-");
-                    let pb = ProgressBar::new(total_bytes).with_style(style);
+                    let pb = ProgressBar::with_draw_target(Some(total_bytes), ProgressDrawTarget::stdout())
+                        .with_style(style);
                     Some(pb)
                 } else {
                     None
@@ -453,7 +455,8 @@ impl Job for FlashJob {
             .template("[{elapsed_precise}] [{bar:40.yellow/blue}] {pos}/{len} tasks ({eta})")
             .expect("valid progress template")
             .progress_chars("#>-");
-        let pb = ProgressBar::new(task_list.len() as u64).with_style(style);
+        let pb =
+            ProgressBar::with_draw_target(Some(task_list.len() as u64), ProgressDrawTarget::stdout()).with_style(style);
 
         for (i, task) in task_list.entries.iter().enumerate() {
             pb.set_message(format!("Task {}/{}: {:?}", i + 1, task_list.len(), task.task_type));
@@ -989,9 +992,11 @@ impl Job for VerifyJob {
 
         // Get SHA256 digest from device
         tracing::info!("Requesting SHA256 digest from device...");
+        let spinner = ctx.show_spinner("Waiting for device SHA256...");
         let device_sha256 = ctx
             .get_sha256_digest(physical_partition, first_lba, sectors_to_read)
             .await?;
+        drop(spinner);
 
         tracing::info!("Device SHA256:     {}", device_sha256);
 

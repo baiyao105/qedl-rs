@@ -40,7 +40,7 @@ pub use client::{QedlClient, QedlClientBuilder};
 pub use error::{QedlFacadeError, Result as QedlResult};
 
 pub use qedl_core::{DeviceState, ErrorCode, PartitionInfo, Session};
-pub use qedl_job::{EraseMethod, ExecutorConfig, JobExecutor, JobResult};
+pub use qedl_job::{EraseMethod, ExecutorConfig, JobExecutor, JobResult, SpinnerHandle};
 
 #[cfg(feature = "sahara")]
 pub use qedl_sahara::{SaharaError, SaharaSession};
