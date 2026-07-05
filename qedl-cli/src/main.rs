@@ -212,8 +212,13 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             client.init().await?;
             drop(spinner);
             let result = client.verify(&partition, &file).await?;
-            success(&result.message);
-            Ok(())
+            if result.success {
+                success(&result.message);
+                Ok(())
+            } else {
+                error(&result.message);
+                process::exit(1);
+            }
         }
         Commands::Peek { address, size, output } => {
             let spinner = Spinner::new("Connecting to device...");

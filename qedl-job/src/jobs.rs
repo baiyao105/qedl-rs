@@ -1000,7 +1000,10 @@ impl Job for VerifyJob {
 
         tracing::info!("Device SHA256:     {}", device_sha256);
 
-        if local_sha256 == device_sha256 {
+        let local_upper = local_sha256.to_uppercase();
+        let device_upper = device_sha256.to_uppercase();
+
+        if local_upper == device_upper {
             tracing::info!("Verification SUCCESS: SHA256 matches!");
             Ok(JobResult {
                 success: true,
@@ -1014,8 +1017,13 @@ impl Job for VerifyJob {
             })
         } else {
             tracing::error!("Verification FAILED! SHA256 mismatch");
-            Err(crate::error::JobError::PreconditionFailed {
-                reason: format!("SHA256 mismatch: local = {}, device = {}", local_sha256, device_sha256),
+            Ok(JobResult {
+                success: false,
+                message: format!(
+                    "Verification FAILED! SHA256 mismatch:\n  local  = {}\n  device = {}",
+                    local_sha256, device_sha256
+                ),
+                steps_completed: 1,
             })
         }
     }
