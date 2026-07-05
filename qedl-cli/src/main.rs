@@ -193,6 +193,28 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             success(&result.message);
             Ok(())
         }
+        Commands::Peek { address, size, output } => {
+            client.init_firehose_only().await?;
+            let addr = parse_hex_or_decimal(&address)?;
+            let data = client.peek(addr, size).await?;
+            if let Some(path) = output {
+                std::fs::write(&path, &data)?;
+                success(&format!("Wrote {} bytes to {}", data.len(), path.display()));
+            } else {
+                // Display hex dump
+                header(&format!("Peek: 0x{:X} ({} bytes)", addr, data.len()));
+                hex_dump_display(&data);
+            }
+            Ok(())
+        }
+        Commands::Poke { address, data } => {
+            client.init_firehose_only().await?;
+            let addr = parse_hex_or_decimal(&address)?;
+            let bytes = parse_hex_data(&data)?;
+            client.poke(addr, &bytes).await?;
+            success(&format!("Poke: wrote {} bytes to 0x{:X}", bytes.len(), addr));
+            Ok(())
+        }
     }
 }
 

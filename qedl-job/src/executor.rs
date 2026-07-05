@@ -487,6 +487,34 @@ impl JobExecutor {
         Ok(())
     }
 
+    /// Read memory at physical address. Returns raw bytes.
+    pub async fn peek(&mut self, address: u64, size: u32) -> Result<Vec<u8>> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+        self.firehose
+            .peek(transport.as_mut(), address, size)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Write memory at physical address.
+    pub async fn poke(&mut self, address: u64, data: &[u8]) -> Result<()> {
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or_else(|| crate::error::JobError::PreconditionFailed {
+                reason: "transport not initialized".to_string(),
+            })?;
+        self.firehose
+            .poke(transport.as_mut(), address, data)
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn init(&mut self) -> Result<()> {
         self.connect()?;
         self.handshake().await?;

@@ -33,6 +33,16 @@ pub enum FirehoseCommand {
         start_sector: u64,
     },
     GetStorageInfo,
+    /// Read memory at physical address
+    Peek {
+        address: u64,
+        size: u32,
+    },
+    /// Write memory at physical address
+    Poke {
+        address: u64,
+        data: Vec<u8>,
+    },
     Power {
         value: String, // "reset", "off", etc.
     },
@@ -80,6 +90,8 @@ impl FirehoseCommand {
                 )
             }
             Self::GetStorageInfo => "getstorageinfo".to_string(),
+            Self::Peek { address, size } => format!("peek(addr=0x{:X}, size={})", address, size),
+            Self::Poke { address, data } => format!("poke(addr=0x{:X}, len={})", address, data.len()),
             Self::Power { value } => format!("power({})", value),
             Self::RawXml(_) => "raw-xml".to_string(),
         }
@@ -140,6 +152,19 @@ impl FirehoseCommand {
                 )
             }
             Self::GetStorageInfo => "<getstorageinfo />".to_string(),
+            Self::Peek { address, size } => {
+                format!(r#"<peek address64="{:#x}" size_in_bytes="{}" />"#, address, size)
+            }
+            Self::Poke { address, data } => {
+                // Format data as "0xAA 0xBB 0xCC" for the value attribute
+                let hex_values: Vec<String> = data.iter().map(|b| format!("0x{:02X}", b)).collect();
+                format!(
+                    r#"<poke address64="{:#x}" size_in_bytes="{}" value64="{}" />"#,
+                    address,
+                    data.len(),
+                    hex_values.join(" ")
+                )
+            }
             Self::Power { value } => {
                 format!(r#"<power value="{}" />"#, value)
             }

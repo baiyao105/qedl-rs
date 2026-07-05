@@ -669,8 +669,51 @@ impl Job for InfoJob {
             }
         }
 
+        // Parse and display storage info from getstorageinfo response
         for log_entry in &extra_logs {
-            if !log_entry.starts_with("Error") {
+            if log_entry.contains("storage_info") {
+                // Try to parse JSON storage info
+                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(log_entry)
+                    && let Some(info) = json_val.get("storage_info")
+                    && let Some(obj) = info.as_object()
+                {
+                    msg.push_str("\n\nStorage Info:");
+                    // Display fields in a readable order
+                    let fields = [
+                        ("mem_type", "Memory Type"),
+                        ("prod_name", "Product Name"),
+                        ("total_blocks", "Total Blocks"),
+                        ("block_size", "Block Size"),
+                        ("page_size", "Page Size"),
+                        ("num_physical", "Physical Units"),
+                        ("num_lun", "LUNs"),
+                    ];
+                    for (key, label) in &fields {
+                        if let Some(val) = obj.get(*key) {
+                            let val_str = match val {
+                                serde_json::Value::Number(n) => n.to_string(),
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            msg.push_str(&format!("\n  {:<16} {}", format!("{}:", label), val_str));
+                        }
+                    }
+                    // Display any remaining fields
+                    for (key, val) in obj {
+                        if !fields.iter().any(|(k, _)| k == key) {
+                            let val_str = match val {
+                                serde_json::Value::Number(n) => n.to_string(),
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            msg.push_str(&format!("\n  {:<16} {}", format!("{}:", key), val_str));
+                        }
+                    }
+                } else {
+                    // Not JSON, just display as-is
+                    msg.push_str(&format!("\n  {}", log_entry));
+                }
+            } else if !log_entry.starts_with("Error") {
                 msg.push_str(&format!("\n  {}", log_entry));
             }
         }

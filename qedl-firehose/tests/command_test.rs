@@ -86,3 +86,39 @@ fn test_raw_xml_passthrough() {
     let cmd = FirehoseCommand::RawXml(xml_str.to_string());
     insta::assert_snapshot!(cmd.to_xml());
 }
+
+#[test]
+fn test_peek_xml() {
+    let cmd = FirehoseCommand::Peek {
+        address: 0x08071320,
+        size: 4096,
+    };
+    insta::assert_snapshot!(cmd.to_xml());
+}
+
+#[test]
+fn test_peek_name() {
+    let cmd = FirehoseCommand::Peek {
+        address: 0x08071320,
+        size: 4096,
+    };
+    assert_eq!(cmd.name(), "peek(addr=0x8071320, size=4096)");
+}
+
+#[test]
+fn test_poke_xml() {
+    let cmd = FirehoseCommand::Poke {
+        address: 0x08071320,
+        data: vec![0xAA, 0xBB, 0xCC, 0xDD],
+    };
+    insta::assert_snapshot!(cmd.to_xml());
+}
+
+#[test]
+fn test_poke_name() {
+    let cmd = FirehoseCommand::Poke {
+        address: 0x08071320,
+        data: vec![0xAA, 0xBB, 0xCC, 0xDD],
+    };
+    assert_eq!(cmd.name(), "poke(addr=0x8071320, len=4)");
+}

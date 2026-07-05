@@ -42,6 +42,7 @@ md-5 = "0.11"
 sha2 = "0.11"
 hex = "0.4"
 crc32fast = "1.4"
+serde_json = "1"
 # test utilities
 pretty_assertions = "1"
 tempfile = "3"

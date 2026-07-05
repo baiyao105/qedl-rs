@@ -1,0 +1,5 @@
+---
+source: qedl-firehose/tests/command_test.rs
+expression: cmd.to_xml()
+---
+<poke address64="0x8071320" size_in_bytes="4" value64="0xAA 0xBB 0xCC 0xDD" />

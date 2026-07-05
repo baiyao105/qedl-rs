@@ -164,6 +164,16 @@ impl QedlClient {
         self.executor.execute(&job).await.map_err(Into::into)
     }
 
+    /// Read memory at physical address. Returns raw bytes.
+    pub async fn peek(&mut self, address: u64, size: u32) -> Result<Vec<u8>> {
+        self.executor.peek(address, size).await.map_err(Into::into)
+    }
+
+    /// Write memory at physical address.
+    pub async fn poke(&mut self, address: u64, data: &[u8]) -> Result<()> {
+        self.executor.poke(address, data).await.map_err(Into::into)
+    }
+
     /// Dumps a partition, resuming from a previous incomplete transfer.
     pub async fn dump_resume(&mut self, partition: &str, output: &Path) -> Result<JobResult> {
         let job = DumpJob {

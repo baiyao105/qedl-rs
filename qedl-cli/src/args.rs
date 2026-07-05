@@ -114,6 +114,25 @@ pub enum Commands {
     /// 校验分区
     Verify { partition: String, file: PathBuf },
 
+    /// 读取内存 (peek)
+    Peek {
+        /// 物理地址 (十六进制，如 0x08071320)
+        address: String,
+        /// 读取字节数
+        size: u32,
+        /// 输出到文件
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
+
+    /// 写入内存 (poke)
+    Poke {
+        /// 物理地址 (十六进制，如 0x08071320)
+        address: String,
+        /// 十六进制数据 (如 "0xAA 0xBB 0xCC" 或 "AABBCC")
+        data: String,
+    },
+
     /// 重启设备
     Reboot,
 

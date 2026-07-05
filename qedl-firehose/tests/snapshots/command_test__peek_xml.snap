@@ -1,0 +1,5 @@
+---
+source: qedl-firehose/tests/command_test.rs
+expression: cmd.to_xml()
+---
+<peek address64="0x8071320" size_in_bytes="4096" />

@@ -157,6 +157,13 @@ impl FirehoseClient {
         Ok(resp)
     }
 
+    /// Send raw XML string to the device without waiting for response.
+    async fn send_xml(&mut self, transport: &mut dyn Transport, xml: &str) -> Result<()> {
+        let _ = transport.flush().await;
+        transport.write(xml.as_bytes()).await?;
+        Ok(())
+    }
+
     /// Read XML response, preserving any extra bytes (raw data) in self.leftover.
     /// This prevents raw data that arrives in the same serial read as XML from being lost.
     /// It continues reading until a <response ... /> tag is found.
@@ -497,6 +504,91 @@ impl FirehoseClient {
 
     pub async fn get_storage_info(&mut self, transport: &mut dyn Transport) -> Result<FirehoseResponse> {
         self.execute_command(transport, &FirehoseCommand::GetStorageInfo).await
+    }
+
+    /// Read memory at physical address. Returns raw bytes.
+    pub async fn peek(&mut self, transport: &mut dyn Transport, address: u64, size: u32) -> Result<Vec<u8>> {
+        let cmd = FirehoseCommand::Peek { address, size };
+        let inner = cmd.to_xml();
+        let xml = format!(r#"<?xml version="1.0" encoding="UTF-8" ?><data>{}</data>"#, inner);
+        tracing::trace!("Firehose -> {}", cmd.name());
+        #[cfg(feature = "trace-xml")]
+        tracing::trace!(xml = %xml, "Firehose XML sent");
+        self.send_xml(transport, &xml).await?;
+
+        // Peek responses come as hex-encoded log entries, not a normal ACK/NAK
+        // We need to accumulate all log entries until we get a response
+        let mut data = Vec::new();
+        let buf = &mut self.read_buf;
+        let mut total_read = 0usize;
+
+        loop {
+            match transport.read(buf).await {
+                Ok(0) => {
+                    tracing::trace!("peek: EOF after {} bytes", total_read);
+                    break;
+                }
+                Ok(n) => {
+                    total_read += n;
+                    let text = String::from_utf8_lossy(&buf[..n]);
+
+                    // Check for error responses
+                    if text.contains("NAK") || text.contains("Invalid parameters") || text.contains("can't") {
+                        tracing::error!("peek NAK at addr=0x{:X}: {}", address, text.trim());
+                        return Err(FirehoseError::Nak {
+                            command: "peek".to_string(),
+                            reason: text.trim().to_string(),
+                        });
+                    }
+
+                    // Parse hex values from log entries
+                    // Format: "0x22 0x00 0x00 0xEA 0x70 0x00 0x00 0xEA"
+                    for word in text.split_whitespace() {
+                        if (word.starts_with("0x") || word.starts_with("0X"))
+                            && let Ok(byte) = u8::from_str_radix(&word[2..], 16)
+                        {
+                            data.push(byte);
+                        }
+                    }
+
+                    // Check if we got the complete response
+                    if text.contains("</data>") || text.contains("<response") {
+                        tracing::debug!(
+                            addr = format!("0x{:X}", address),
+                            bytes = data.len(),
+                            "Firehose <- peek"
+                        );
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if data.is_empty() {
+                        return Err(e.into());
+                    }
+                    // Timeout with partial data is OK for peek
+                    tracing::trace!("peek: read timeout with {} bytes", data.len());
+                    break;
+                }
+            }
+        }
+
+        Ok(data)
+    }
+
+    /// Write memory at physical address.
+    pub async fn poke(&mut self, transport: &mut dyn Transport, address: u64, data: &[u8]) -> Result<()> {
+        let cmd = FirehoseCommand::Poke {
+            address,
+            data: data.to_vec(),
+        };
+        let resp = self.execute_command(transport, &cmd).await?;
+        if !resp.is_ack() {
+            return Err(FirehoseError::Nak {
+                command: "poke".to_string(),
+                reason: resp.error.unwrap_or_else(|| "unknown".to_string()),
+            });
+        }
+        Ok(())
     }
 
     pub async fn reboot(&mut self, transport: &mut dyn Transport) -> Result<()> {
