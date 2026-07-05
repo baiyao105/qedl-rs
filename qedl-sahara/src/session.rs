@@ -83,8 +83,15 @@ impl<T: Transport> SaharaSession<T> {
                 self.emit(SaharaEvent::AlreadyInFirehoseMode);
                 return Ok((self.transport, SaharaDeviceInfo::default()));
             }
-            Err(_) => {
-                tracing::debug!("Hello not received, trying PblHack recovery");
+            Err(SaharaError::HelloFailed) => {
+                // Hello not received, try NOP to check if device is in Firehose mode
+                tracing::debug!("Hello not received, sending NOP to check Firehose mode");
+                if self.try_firehose_nop().await {
+                    tracing::info!("Device is in Firehose mode (NOP ACK received)");
+                    self.emit(SaharaEvent::AlreadyInFirehoseMode);
+                    return Ok((self.transport, SaharaDeviceInfo::default()));
+                }
+                tracing::debug!("NOP failed, trying PblHack recovery");
                 self.pbl_hack(mode).await?;
                 match self.read_hello().await {
                     Ok(h) => h,
@@ -96,6 +103,7 @@ impl<T: Transport> SaharaSession<T> {
                     Err(e) => return Err(e),
                 }
             }
+            Err(e) => return Err(e),
         };
 
         tracing::debug!(
@@ -238,6 +246,33 @@ impl<T: Transport> SaharaSession<T> {
         self.mode_switch(mode).await?;
         tracing::debug!("Sahara PblHack recovery complete");
         Ok(())
+    }
+
+    /// Try to detect if device is in Firehose mode by sending a NOP command.
+    /// Returns true if device responds with ACK.
+    async fn try_firehose_nop(&mut self) -> bool {
+        let nop_xml = b"<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<data>\n<nop />\n</data>";
+
+        let _ = self.transport.flush().await;
+        self.transport.set_timeout(Duration::from_millis(500));
+
+        if self.transport.write(nop_xml).await.is_err() {
+            tracing::trace!("NOP: write failed");
+            return false;
+        }
+
+        let mut buf = [0u8; 512];
+        match self.transport.read(&mut buf).await {
+            Ok(n) if n > 0 => {
+                let response = String::from_utf8_lossy(&buf[..n]);
+                tracing::trace!("NOP response: {}", response.trim());
+                response.contains("ACK")
+            }
+            _ => {
+                tracing::trace!("NOP: no response");
+                false
+            }
+        }
     }
 
     async fn mode_switch(&mut self, mode: SaharaMode) -> Result<()> {

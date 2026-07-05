@@ -670,49 +670,205 @@ impl Job for InfoJob {
         // Parse and display storage info from getstorageinfo response
         for log_entry in &extra_logs {
             if log_entry.contains("storage_info") {
-                // Try to parse JSON storage info
                 if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(log_entry)
                     && let Some(info) = json_val.get("storage_info")
                     && let Some(obj) = info.as_object()
                 {
-                    msg.push_str("\n\nStorage Info:");
-                    // Display fields in a readable order
-                    let fields = [
-                        ("mem_type", "Memory Type"),
-                        ("prod_name", "Product Name"),
-                        ("total_blocks", "Total Blocks"),
-                        ("block_size", "Block Size"),
-                        ("page_size", "Page Size"),
-                        ("num_physical", "Physical Units"),
-                        ("num_lun", "LUNs"),
-                    ];
-                    for (key, label) in &fields {
-                        if let Some(val) = obj.get(*key) {
-                            let val_str = match val {
-                                serde_json::Value::Number(n) => n.to_string(),
-                                serde_json::Value::String(s) => s.clone(),
-                                other => other.to_string(),
-                            };
-                            msg.push_str(&format!("\n  {:<16} {}", format!("{}:", label), val_str));
+                    let mem_type = obj.get("mem_type").and_then(|v| v.as_str()).unwrap_or("Unknown");
+                    let is_ufs = mem_type.eq_ignore_ascii_case("UFS");
+
+                    msg.push_str("\n\nStorage Device Info:");
+                    msg.push_str("\n  Memory Type:        ");
+                    msg.push_str(mem_type);
+
+                    // Product info
+                    if let Some(prod) = obj.get("prod_name").and_then(|v| v.as_str()) {
+                        msg.push_str("\n  Product:            ");
+                        msg.push_str(prod);
+                    }
+
+                    // Serial number
+                    if let Some(serial) = obj.get("serial_num") {
+                        msg.push_str("\n  Serial:             ");
+                        match serial {
+                            serde_json::Value::Number(n) => {
+                                if let Some(s) = n.as_u64() {
+                                    msg.push_str(&format!("0x{:08X}", s));
+                                } else {
+                                    msg.push_str(&n.to_string());
+                                }
+                            }
+                            serde_json::Value::String(s) => msg.push_str(s),
+                            _ => {}
                         }
                     }
-                    // Display any remaining fields
-                    for (key, val) in obj {
-                        if !fields.iter().any(|(k, _)| k == key) {
-                            let val_str = match val {
-                                serde_json::Value::Number(n) => n.to_string(),
-                                serde_json::Value::String(s) => s.clone(),
-                                other => other.to_string(),
+
+                    // Firmware version
+                    if let Some(fw) = obj.get("fw_version") {
+                        msg.push_str("\n  Firmware:           ");
+                        match fw {
+                            serde_json::Value::String(s) => msg.push_str(s),
+                            serde_json::Value::Number(n) => {
+                                if let Some(v) = n.as_u64() {
+                                    msg.push_str(&format!("0x{:016X}", v));
+                                } else {
+                                    msg.push_str(&n.to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Manufacturer ID
+                    if let Some(mfr) = obj.get("mfr_id").or_else(|| obj.get("manufacturer_id"))
+                        && let serde_json::Value::Number(n) = mfr
+                    {
+                        msg.push_str("\n  Manufacturer ID:    ");
+                        if let Some(v) = n.as_u64() {
+                            msg.push_str(&format!("0x{:02X}", v));
+                        } else {
+                            msg.push_str(&n.to_string());
+                        }
+                    }
+
+                    // Capacity info
+                    let total_blocks = obj.get("total_blocks").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let block_size = obj.get("block_size").and_then(|v| v.as_u64()).unwrap_or(512);
+                    let capacity = total_blocks * block_size;
+
+                    msg.push_str("\n\nCapacity:");
+                    msg.push_str(&format!("\n  Raw Capacity:       {}", humanize_size(capacity)));
+                    msg.push_str(&format!("\n  Total Blocks:       {}", total_blocks));
+                    msg.push_str(&format!("\n  Block Size:         {} bytes", block_size));
+
+                    // Page size (may differ from block size for UFS)
+                    if let Some(page_size) = obj.get("page_size").and_then(|v| v.as_u64())
+                        && page_size != block_size
+                    {
+                        msg.push_str(&format!("\n  Page Size:          {} bytes", page_size));
+                    }
+
+                    // Logical block info
+                    if let Some(logical_blocks) = obj.get("logical_block_count").and_then(|v| v.as_u64()) {
+                        msg.push_str(&format!("\n  Logical Blocks:     {}", logical_blocks));
+                    }
+                    if let Some(logical_size) = obj.get("logical_block_size").and_then(|v| v.as_u64())
+                        && logical_size != block_size
+                    {
+                        msg.push_str(&format!("\n  Logical Block Size: {} bytes", logical_size));
+                    }
+
+                    // Physical units
+                    if let Some(num_physical) = obj.get("num_physical").and_then(|v| v.as_u64()) {
+                        msg.push_str(&format!("\n  Physical Units:     {}", num_physical));
+                    }
+
+                    // UFS specific fields
+                    if is_ufs {
+                        msg.push_str("\n\nUFS Configuration:");
+
+                        // LUN info
+                        if let Some(total_lu) = obj
+                            .get("total_active_lu")
+                            .or_else(|| obj.get("num_lun"))
+                            .and_then(|v| v.as_u64())
+                        {
+                            msg.push_str(&format!("\n  Total Active LU:    {}", total_lu));
+                        }
+                        if let Some(current_lun) = obj.get("current_lun_number").and_then(|v| v.as_u64()) {
+                            msg.push_str(&format!("\n  Current LUN:        {}", current_lun));
+                        }
+                        if let Some(boot_lun) = obj.get("boot_lun_id").and_then(|v| v.as_u64()) {
+                            msg.push_str(&format!("\n  Boot LUN ID:        {}", boot_lun));
+                        }
+                        if let Some(lun_enable) = obj.get("lun_enable_bitmask").and_then(|v| v.as_u64()) {
+                            msg.push_str(&format!("\n  LUN Enable:         0b{:08b}", lun_enable));
+                        }
+
+                        // Block sizes
+                        if let Some(min_block) = obj.get("min_block_size").and_then(|v| v.as_u64()) {
+                            msg.push_str(&format!("\n  Min Block Size:     {}", humanize_size(min_block)));
+                        }
+                        if let Some(erase_block) = obj.get("erase_block_size").and_then(|v| v.as_u64()) {
+                            msg.push_str(&format!("\n  Erase Block Size:   {}", humanize_size(erase_block)));
+                        }
+                        if let Some(alloc_unit) = obj.get("allocation_unit_size").and_then(|v| v.as_u64()) {
+                            msg.push_str(&format!("\n  Allocation Unit:    {}", humanize_size(alloc_unit)));
+                        }
+
+                        // RPMB
+                        if let Some(rpmb) = obj.get("rpmb_readwrite_size").and_then(|v| v.as_u64()) {
+                            msg.push_str(&format!("\n  RPMB RW Size:       {}", humanize_size(rpmb)));
+                        }
+
+                        // Boot partition
+                        if let Some(boot_en) = obj.get("boot_partition_enabled").and_then(|v| v.as_u64()) {
+                            msg.push_str(&format!(
+                                "\n  Boot Partition:     {}",
+                                if boot_en != 0 { "Enabled" } else { "Disabled" }
+                            ));
+                        }
+
+                        // Write protect
+                        if let Some(wp) = obj.get("lu_write_protect").and_then(|v| v.as_u64()) {
+                            let wp_str = match wp {
+                                0 => "None",
+                                1 => "Power-on Write Protect",
+                                2 => "Permanent Write Protect",
+                                _ => "Unknown",
                             };
-                            msg.push_str(&format!("\n  {:<16} {}", format!("{}:", key), val_str));
+                            msg.push_str(&format!("\n  Write Protect:      {}", wp_str));
+                        }
+
+                        // Provisioning type
+                        if let Some(prov) = obj.get("provisioning_type").and_then(|v| v.as_u64()) {
+                            let prov_str = match prov {
+                                0 => "Not Provisioned",
+                                1 => "Thin Provisioned",
+                                2 => "Machine Provisioned",
+                                _ => "Unknown",
+                            };
+                            msg.push_str(&format!("\n  Provisioning:       {}", prov_str));
+                        }
+
+                        // Config descriptor lock
+                        if let Some(lock) = obj.get("b_config_descr_lock").and_then(|v| v.as_u64()) {
+                            msg.push_str(&format!(
+                                "\n  Config Locked:      {}",
+                                if lock != 0 { "Yes" } else { "No" }
+                            ));
+                        }
+
+                        // SCSI Inquiry string
+                        if let Some(inquiry) = obj.get("inquiry_command_output").and_then(|v| v.as_str()) {
+                            let trimmed = inquiry.trim_end_matches('\0').trim();
+                            if !trimmed.is_empty() {
+                                msg.push_str(&format!("\n  SCSI Inquiry:       {}", trimmed));
+                            }
+                        }
+
+                        // Supported memory types
+                        if let Some(supported) = obj.get("supported_memory_types").and_then(|v| v.as_str()) {
+                            msg.push_str(&format!("\n  Supported Types:    {}", supported));
+                        }
+                    }
+
+                    // eMMC specific fields
+                    if !is_ufs {
+                        // eMMC specific if any
+                        if let Some(ext_csd_rev) = obj.get("ext_csd_rev").and_then(|v| v.as_u64()) {
+                            msg.push_str("\n\neMMC Configuration:");
+                            msg.push_str(&format!("\n  ExtCSD Rev:         {}", ext_csd_rev));
                         }
                     }
                 } else {
-                    // Not JSON, just display as-is
-                    msg.push_str(&format!("\n  {}", log_entry));
+                    // Not JSON, display as-is
+                    msg.push_str("\n  ");
+                    msg.push_str(log_entry);
                 }
             } else if !log_entry.starts_with("Error") {
-                msg.push_str(&format!("\n  {}", log_entry));
+                msg.push_str("\n  ");
+                msg.push_str(log_entry);
             }
         }
 
