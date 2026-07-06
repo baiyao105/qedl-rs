@@ -9,24 +9,23 @@ description = "Job orchestration for flash, dump, erase, and info operations"
 [dependencies]
 qedl-core.workspace = true
 qedl-transport.workspace = true
-qedl-sahara.workspace = true
+qedl-sahara = { workspace = true, optional = true }
 qedl-firehose.workspace = true
 qedl-storage.workspace = true
 qedl-image = { workspace = true, optional = true }
 thiserror.workspace = true
 tracing.workspace = true
-indicatif.workspace = true
 bytes.workspace = true
 hex.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
-quick-xml.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
 tempfile.workspace = true
 
 [features]
-default = []
+default = ["sahara"]
 sparse = ["dep:qedl-image"]
+sahara = ["dep:qedl-sahara"]

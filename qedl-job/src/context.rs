@@ -90,7 +90,7 @@ pub trait JobContext: Send + Sync {
         num_sectors: u64,
     ) -> Result<String>;
 
-    fn progress(&self) -> &dyn ProgressReporter;
+    fn progress(&self) -> std::sync::Arc<dyn ProgressReporter>;
 
     fn session(&self) -> Option<&Session>;
 

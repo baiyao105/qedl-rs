@@ -177,8 +177,8 @@ impl JobContext for MockJobContext {
         Ok(())
     }
 
-    fn progress(&self) -> &dyn ProgressReporter {
-        &NoopProgress
+    fn progress(&self) -> std::sync::Arc<dyn ProgressReporter> {
+        std::sync::Arc::new(NoopProgress)
     }
 
     fn session(&self) -> Option<&Session> {

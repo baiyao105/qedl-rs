@@ -1,7 +1,6 @@
 use crate::context::JobContext;
 use crate::error::Result;
 use async_trait::async_trait;
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -29,6 +28,21 @@ pub trait Job: Send + Sync {
     async fn execute(&self, ctx: &mut dyn JobContext) -> Result<JobResult>;
 
     fn name(&self) -> &str;
+
+    /// Validate job parameters before execution. Default: Ok(())
+    fn validate(&self, _ctx: &dyn JobContext) -> Result<()> {
+        Ok(())
+    }
+
+    /// Human-readable description. Default: name()
+    fn description(&self) -> String {
+        self.name().to_string()
+    }
+
+    /// Number of steps for progress tracking. Default: 1
+    fn step_count(&self) -> usize {
+        1
+    }
 }
 
 pub struct DumpJob {
@@ -107,17 +121,11 @@ impl Job for DumpJob {
 
         let start_time = Instant::now();
 
-        let pb = if self.show_progress {
-            let style = ProgressStyle::default_bar()
-                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
-                .expect("valid progress template")
-                .progress_chars("#>-");
-            let pb = ProgressBar::with_draw_target(Some(total_bytes), ProgressDrawTarget::stdout()).with_style(style);
-            pb.set_position(dumped_bytes);
-            Some(pb)
-        } else {
-            None
-        };
+        let progress = ctx.progress();
+        if self.show_progress {
+            progress.start(total_bytes, "Dumping");
+            progress.update(dumped_bytes);
+        }
 
         while remaining > 0 {
             let chunk = remaining.min(sectors_per_chunk);
@@ -128,13 +136,14 @@ impl Job for DumpJob {
             remaining -= chunk;
 
             let bytes_read = chunk * sector_size;
-            if let Some(ref pb) = pb {
-                pb.inc(bytes_read);
+            if self.show_progress {
+                dumped_bytes += bytes_read;
+                progress.update(dumped_bytes);
             }
         }
 
-        if let Some(pb) = pb {
-            pb.finish_with_message("done");
+        if self.show_progress {
+            progress.finish("done");
         }
 
         let total_elapsed = start_time.elapsed().as_secs_f64();
@@ -215,14 +224,8 @@ impl Job for WriteJob {
                 let mut written: u64 = 0;
                 let mut remaining = num_sectors;
 
-                let style = ProgressStyle::default_bar()
-                    .template(
-                        "[{elapsed_precise}] [{bar:40.green/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
-                    )
-                    .expect("valid progress template")
-                    .progress_chars("#>-");
-                let pb =
-                    ProgressBar::with_draw_target(Some(total_bytes), ProgressDrawTarget::stdout()).with_style(style);
+                let progress = ctx.progress();
+                progress.start(total_bytes, "Writing");
 
                 let mut chunk_buffer = Vec::with_capacity(sectors_per_chunk as usize * sector_size as usize);
 
@@ -242,10 +245,10 @@ impl Job for WriteJob {
                     written += chunk;
                     remaining -= chunk;
 
-                    pb.inc(chunk_bytes as u64);
+                    progress.update(written * sector_size);
                 }
 
-                pb.finish_with_message("done");
+                progress.finish("done");
             }
             #[cfg(not(feature = "sparse"))]
             {
@@ -280,11 +283,8 @@ impl Job for WriteJob {
             let mut written: u64 = 0;
             let mut remaining = num_sectors;
 
-            let style = ProgressStyle::default_bar()
-                .template("[{elapsed_precise}] [{bar:40.green/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
-                .expect("valid progress template")
-                .progress_chars("#>-");
-            let pb = ProgressBar::with_draw_target(Some(total_bytes), ProgressDrawTarget::stdout()).with_style(style);
+            let progress = ctx.progress();
+            progress.start(total_bytes, "Writing");
 
             let mut chunk_buffer = vec![0u8; chunk_size];
 
@@ -317,10 +317,10 @@ impl Job for WriteJob {
                 written += chunk;
                 remaining -= chunk;
 
-                pb.inc(chunk_bytes as u64);
+                progress.update(written * sector_size);
             }
 
-            pb.finish_with_message("done");
+            progress.finish("done");
         }
 
         Ok(JobResult {
@@ -374,25 +374,16 @@ impl Job for EraseJob {
                     .await?;
             }
             EraseMethod::WriteZero => {
-                let pb = if self.show_progress {
-                    let style = ProgressStyle::default_bar()
-                        .template(
-                            "[{elapsed_precise}] [{bar:40.red/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
-                        )
-                        .expect("valid progress template")
-                        .progress_chars("#>-");
-                    let pb = ProgressBar::with_draw_target(Some(total_bytes), ProgressDrawTarget::stdout())
-                        .with_style(style);
-                    Some(pb)
-                } else {
-                    None
-                };
+                let progress = ctx.progress();
+                if self.show_progress {
+                    progress.start(total_bytes, "Erasing");
+                }
 
                 ctx.erase_sectors(physical_partition, first_lba, total_sectors).await?;
 
-                if let Some(pb) = pb {
-                    pb.set_position(total_bytes);
-                    pb.finish_with_message("done");
+                if self.show_progress {
+                    progress.update(total_bytes);
+                    progress.finish("done");
                 }
             }
         }
@@ -451,15 +442,10 @@ impl Job for FlashJob {
         let sectors_per_chunk = (max_payload / sector_size).max(1);
         let start_time = Instant::now();
 
-        let style = ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40.yellow/blue}] {pos}/{len} tasks ({eta})")
-            .expect("valid progress template")
-            .progress_chars("#>-");
-        let pb =
-            ProgressBar::with_draw_target(Some(task_list.len() as u64), ProgressDrawTarget::stdout()).with_style(style);
+        let progress = ctx.progress();
+        progress.start(task_list.len() as u64, "Flashing");
 
         for (i, task) in task_list.entries.iter().enumerate() {
-            pb.set_message(format!("Task {}/{}: {:?}", i + 1, task_list.len(), task.task_type));
             tracing::debug!(task_num = i + 1, total = task_list.len(), task_type = ?task.task_type, "Executing flash task");
 
             match task.task_type {
@@ -551,10 +537,10 @@ impl Job for FlashJob {
                     }
                 }
             }
-            pb.inc(1);
+            progress.update((i + 1) as u64);
         }
 
-        pb.finish_with_message("All tasks done");
+        progress.finish("All tasks done");
 
         if let Some(ref patch_path) = self.patch {
             tracing::info!(path = ?patch_path, "Applying patches");
@@ -650,7 +636,7 @@ impl Job for InfoJob {
 
         // Add Sahara device info if available
         if let Some(session) = ctx.session() {
-            if let Some(ref msm_id) = session.msm_hw_id {
+            if let Some(msm_id) = session.msm_hw_id() {
                 let hex_str: Vec<String> = msm_id.iter().map(|b| format!("{:02X}", b)).collect();
                 msg.push_str(&format!("\nMSM HW ID:     {}", hex_str.join("")));
                 // Try to extract SOC_HW_VERSION (first 4 bytes LE)
@@ -659,13 +645,14 @@ impl Job for InfoJob {
                     msg.push_str(&format!("\nSOC HW Ver:    0x{:08X}", soc_hw_ver));
                 }
             }
-            if let Some(serial) = session.serial_num {
+            if let Some(serial) = session.serial_num() {
                 msg.push_str(&format!("\nSerial:        0x{:016X}", serial));
             }
-            if let Some(ref target) = session.firehose.target_name {
+            let firehose = session.firehose_info();
+            if let Some(ref target) = firehose.target_name {
                 msg.push_str(&format!("\nTarget:        {}", target));
             }
-            if let Some(ref version) = session.firehose.version {
+            if let Some(ref version) = firehose.version {
                 msg.push_str(&format!("\nFH Version:    {}", version));
             }
         }

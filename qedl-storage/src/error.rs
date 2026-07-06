@@ -21,9 +21,6 @@ pub enum StorageError {
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-
-    #[error("firehose error: {0}")]
-    Firehose(#[from] qedl_firehose::FirehoseError),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -37,7 +34,6 @@ impl From<StorageError> for qedl_core::QedlError {
             StorageError::EmptyPartitionTable => qedl_core::ErrorCode::StorageEmptyTable,
             StorageError::InvalidEntry { .. } => qedl_core::ErrorCode::StorageInvalidSignature,
             StorageError::Io(_) => qedl_core::ErrorCode::TransportIo,
-            StorageError::Firehose(_) => qedl_core::ErrorCode::FirehoseNak,
         };
         qedl_core::QedlError::storage(code, e)
     }

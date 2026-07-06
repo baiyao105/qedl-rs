@@ -36,11 +36,20 @@ pub use qedl_sahara as sahara;
 #[cfg(feature = "sparse")]
 pub use qedl_image as image;
 
-pub use client::{QedlClient, QedlClientBuilder};
+pub use client::{QedlClient, QedlClientBuilder, QedlClientTrait};
 pub use error::{QedlFacadeError, Result as QedlResult};
 
-pub use qedl_core::{DeviceState, ErrorCode, PartitionInfo, Session};
-pub use qedl_job::{EraseMethod, ExecutorConfig, JobExecutor, JobResult, SpinnerHandle};
+pub use qedl_core::{
+    DeviceCapabilities, DeviceInfo, DeviceMode, DeviceState, ErrorCode, EventSink, FirehoseInfo, NoopEventSink,
+    NoopProgress, PartitionInfo, ProgressReporter, Session,
+};
+pub use qedl_firehose::FirehoseError;
+pub use qedl_job::{
+    EraseMethod, ExecutorConfig, ExecutorConfigBuilder, Job, JobContext, JobError, JobExecutor, JobResult,
+    ProgressFactory, SpinnerFactory, SpinnerHandle,
+};
+pub use qedl_storage::StorageError;
+pub use qedl_transport::{DeviceEnumerator, DeviceEnumeratorTrait, MockTransport, Transport, TransportError};
 
 #[cfg(feature = "sahara")]
-pub use qedl_sahara::{SaharaError, SaharaSession};
+pub use qedl_sahara::{SaharaCommand, SaharaError, SaharaMode, SaharaSession};

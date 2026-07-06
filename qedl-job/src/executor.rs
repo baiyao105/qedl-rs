@@ -7,9 +7,11 @@ use qedl_core::{
     DeviceState, Event, EventSink, JobEvent, NoopProgress, PartitionInfo, ProgressReporter, Session, emit_event,
 };
 use qedl_firehose::FirehoseClient;
+#[cfg(feature = "sahara")]
 use qedl_sahara::SaharaSession;
 use qedl_storage::{GptTable, PartitionMap};
 use qedl_transport::{DeviceEnumerator, DeviceInfo, SerialTransport, Transport};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,7 +19,9 @@ use std::time::Duration;
 /// Factory for creating spinner handles. The CLI provides this to show spinners during long operations.
 pub type SpinnerFactory = Arc<dyn Fn(&str) -> Box<dyn crate::context::SpinnerHandle + Send> + Send + Sync>;
 
-#[derive(Clone)]
+/// Factory for creating progress reporters. The CLI provides this to show progress bars during long operations.
+pub type ProgressFactory = Arc<dyn Fn() -> Box<dyn ProgressReporter + Send> + Send + Sync>;
+
 pub struct ExecutorConfig {
     pub port: Option<String>,
     pub serial: Option<String>,
@@ -29,6 +33,27 @@ pub struct ExecutorConfig {
     pub event_sink: Option<Arc<dyn EventSink>>,
     pub auto_edl_switch: bool,
     pub spinner_factory: Option<SpinnerFactory>,
+    pub progress_factory: Option<ProgressFactory>,
+    pub extras: HashMap<String, Box<dyn std::any::Any + Send + Sync>>,
+}
+
+impl Clone for ExecutorConfig {
+    fn clone(&self) -> Self {
+        Self {
+            port: self.port.clone(),
+            serial: self.serial.clone(),
+            loader: self.loader.clone(),
+            timeout: self.timeout,
+            dry_run: self.dry_run,
+            verbose: self.verbose,
+            max_retries: self.max_retries,
+            event_sink: self.event_sink.clone(),
+            auto_edl_switch: self.auto_edl_switch,
+            spinner_factory: self.spinner_factory.clone(),
+            progress_factory: self.progress_factory.clone(),
+            extras: HashMap::new(), // extras cannot be cloned
+        }
+    }
 }
 
 impl Default for ExecutorConfig {
@@ -44,6 +69,8 @@ impl Default for ExecutorConfig {
             event_sink: None,
             auto_edl_switch: true,
             spinner_factory: None,
+            progress_factory: None,
+            extras: HashMap::new(),
         }
     }
 }
@@ -64,6 +91,11 @@ impl std::fmt::Debug for ExecutorConfig {
                 "spinner_factory",
                 &self.spinner_factory.as_ref().map(|_| "<SpinnerFactory>"),
             )
+            .field(
+                "progress_factory",
+                &self.progress_factory.as_ref().map(|_| "<ProgressFactory>"),
+            )
+            .field("extras_count", &self.extras.len())
             .finish()
     }
 }
@@ -85,6 +117,8 @@ pub struct ExecutorConfigBuilder {
     event_sink: Option<Arc<dyn EventSink>>,
     auto_edl_switch: bool,
     spinner_factory: Option<SpinnerFactory>,
+    progress_factory: Option<ProgressFactory>,
+    extras: HashMap<String, Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl ExecutorConfigBuilder {
@@ -100,6 +134,8 @@ impl ExecutorConfigBuilder {
             event_sink: None,
             auto_edl_switch: true,
             spinner_factory: None,
+            progress_factory: None,
+            extras: HashMap::new(),
         }
     }
 
@@ -156,6 +192,19 @@ impl ExecutorConfigBuilder {
         self
     }
 
+    pub fn progress_factory(
+        mut self,
+        factory: impl Fn() -> Box<dyn ProgressReporter + Send> + Send + Sync + 'static,
+    ) -> Self {
+        self.progress_factory = Some(Arc::new(factory));
+        self
+    }
+
+    pub fn extra(mut self, key: impl Into<String>, value: Box<dyn std::any::Any + Send + Sync>) -> Self {
+        self.extras.insert(key.into(), value);
+        self
+    }
+
     pub fn build(self) -> ExecutorConfig {
         ExecutorConfig {
             port: self.port,
@@ -168,6 +217,8 @@ impl ExecutorConfigBuilder {
             event_sink: self.event_sink,
             auto_edl_switch: self.auto_edl_switch,
             spinner_factory: self.spinner_factory,
+            progress_factory: self.progress_factory,
+            extras: self.extras,
         }
     }
 }
@@ -187,11 +238,13 @@ pub struct JobExecutor {
     partition_infos: Vec<PartitionInfo>,
     state: DeviceState,
     session: Option<Session>,
+    progress_reporter: Option<Arc<dyn ProgressReporter + Send>>,
 }
 
 impl JobExecutor {
     pub fn new(config: ExecutorConfig) -> Self {
         let firehose = FirehoseClient::new().with_event_sink(config.event_sink.clone());
+        let progress_reporter = config.progress_factory.as_ref().map(|f| Arc::from(f()));
         Self {
             config,
             device: None,
@@ -201,6 +254,7 @@ impl JobExecutor {
             partition_infos: Vec::new(),
             state: DeviceState::Disconnected,
             session: None,
+            progress_reporter,
         }
     }
 
@@ -296,18 +350,24 @@ impl JobExecutor {
         tracing::info!("Opening serial port {}", device.port);
         let transport = SerialTransport::open(&device.port, 115200, self.config.timeout)?;
 
+        self.handshake_sahara(transport).await
+    }
+
+    #[cfg(feature = "sahara")]
+    async fn handshake_sahara(&mut self, transport: SerialTransport) -> Result<()> {
         tracing::info!("Starting Sahara handshake");
-        let sahara = SaharaSession::new(transport).with_event_sink(self.config.event_sink.clone());
+        let mut sahara = SaharaSession::new(transport).with_event_sink(self.config.event_sink.clone());
         match sahara
             .handshake(self.config.loader.as_deref(), qedl_sahara::SaharaMode::ImageTransfer)
             .await
         {
-            Ok((transport, sahara_info)) => {
+            Ok(sahara_info) => {
                 tracing::info!("Sahara handshake complete");
                 if let Some(ref mut session) = self.session {
-                    session.msm_hw_id = sahara_info.msm_hw_id;
-                    session.serial_num = sahara_info.serial_num;
+                    session.set_msm_hw_id(sahara_info.msm_hw_id);
+                    session.set_serial_num(sahara_info.serial_num);
                 }
+                let transport = sahara.into_transport();
                 self.transport = Some(Box::new(transport));
                 self.state = DeviceState::Ready;
             }
@@ -315,6 +375,13 @@ impl JobExecutor {
         }
 
         Ok(())
+    }
+
+    #[cfg(not(feature = "sahara"))]
+    async fn handshake_sahara(&mut self, _transport: SerialTransport) -> Result<()> {
+        Err(crate::error::JobError::PreconditionFailed {
+            reason: "sahara feature not enabled".to_string(),
+        })
     }
 
     pub async fn init_firehose(&mut self) -> Result<()> {
@@ -331,23 +398,24 @@ impl JobExecutor {
         self.firehose.configure(transport.as_mut()).await?;
         tracing::info!(
             "Firehose configured (Target={} Memory={})",
-            self.firehose.target_name,
-            self.firehose.memory_name
+            self.firehose.target_name(),
+            self.firehose.memory_name()
         );
 
         tracing::debug!("Querying storage info");
         match self.firehose.get_storage_info(transport.as_mut()).await {
             Ok(storage_resp) => {
-                if let Some(name) = &storage_resp.memory_name {
+                if let Some(name) = &storage_resp.config.memory_name {
                     tracing::debug!("Storage type: {}", name);
                 }
-                if let Some(ss) = storage_resp.sector_size {
-                    tracing::debug!("Sector size: {} bytes", ss);
-                    self.firehose.sector_size = ss;
-                }
-                if let Some(ts) = storage_resp.total_sectors {
-                    tracing::debug!("Total sectors: {}", ts);
-                    self.firehose.total_sectors = ts;
+                if storage_resp.config.sector_size.is_some() || storage_resp.config.total_sectors.is_some() {
+                    tracing::debug!(
+                        "Storage info: sector_size={:?}, total_sectors={:?}",
+                        storage_resp.config.sector_size,
+                        storage_resp.config.total_sectors
+                    );
+                    self.firehose
+                        .update_from_storage_info(storage_resp.config.sector_size, storage_resp.config.total_sectors);
                 }
             }
             Err(e) => {
@@ -356,15 +424,17 @@ impl JobExecutor {
         }
 
         if let Some(ref mut session) = self.session {
-            session.firehose.sector_size = self.firehose.sector_size;
-            session.firehose.max_payload_size = self.firehose.max_payload_size;
-            session.firehose.max_payload_size_from_target = self.firehose.max_payload_size_from_target;
-            session.firehose.max_payload_size_to_target_supported = self.firehose.max_payload_size_to_target_supported;
-            session.firehose.max_xml_size = self.firehose.max_xml_size;
-            session.firehose.target_name = Some(self.firehose.target_name.clone());
-            session.firehose.version = self.firehose.version.clone();
-            session.capabilities.memory_type = self.firehose.memory_name.clone();
-            session.capabilities.total_sectors = self.firehose.total_sectors;
+            session.update_from_firehose(
+                self.firehose.sector_size(),
+                self.firehose.max_payload_size(),
+                self.firehose.max_payload_size_from_target(),
+                self.firehose.max_payload_size_to_target_supported(),
+                self.firehose.max_xml_size(),
+                self.firehose.target_name(),
+                self.firehose.version(),
+                self.firehose.memory_name(),
+                self.firehose.total_sectors(),
+            );
         }
 
         Ok(())
@@ -380,9 +450,9 @@ impl JobExecutor {
             })?;
 
         let sector_size = self.firehose.sector_size();
-        let total_sectors = self.firehose.total_sectors;
+        let total_sectors = self.firehose.total_sectors();
 
-        let max_lun = if self.firehose.memory_name.to_lowercase().contains("ufs") {
+        let max_lun = if self.firehose.memory_name().to_lowercase().contains("ufs") {
             tracing::debug!("UFS storage detected, scanning LUNs 0-3");
             4u8
         } else {
@@ -395,13 +465,13 @@ impl JobExecutor {
             tracing::debug!("Reading GPT from LUN {}", lun);
             match read_gpt_for_lun(transport.as_mut(), &mut self.firehose, lun, sector_size, total_sectors).await {
                 Ok(table) => {
-                    if self.firehose.total_sectors == 0
+                    if self.firehose.total_sectors() == 0
                         && table.primary_valid
                         && let Some(hdr) = &table.header
                     {
                         let calculated_total = hdr.backup_lba + 1;
                         tracing::debug!("Using GPT backup_lba for total sectors: {}", calculated_total);
-                        self.firehose.total_sectors = calculated_total;
+                        self.firehose.update_from_storage_info(None, Some(calculated_total));
                     }
 
                     let count = table.entries.len();
@@ -460,6 +530,7 @@ impl JobExecutor {
             });
         }
 
+        job.validate(self)?;
         job.execute(self).await
     }
 
@@ -469,10 +540,6 @@ impl JobExecutor {
 
     pub fn partitions(&self) -> &PartitionMap {
         &self.partitions
-    }
-
-    pub fn firehose(&self) -> &FirehoseClient {
-        &self.firehose
     }
 
     pub fn state(&self) -> DeviceState {
@@ -485,6 +552,10 @@ impl JobExecutor {
 
     pub fn partition_infos(&self) -> &[PartitionInfo] {
         &self.partition_infos
+    }
+
+    pub fn extras(&self) -> &HashMap<String, Box<dyn std::any::Any + Send + Sync>> {
+        &self.config.extras
     }
 
     pub async fn reboot(&mut self) -> Result<()> {
@@ -574,22 +645,30 @@ impl JobExecutor {
             .await
         {
             Ok(storage_resp) => {
-                if let Some(name) = &storage_resp.memory_name {
+                if let Some(name) = &storage_resp.config.memory_name {
                     tracing::debug!("Storage type: {}", name);
                 }
-                if let Some(ss) = storage_resp.sector_size {
-                    tracing::debug!("Sector size: {} bytes", ss);
-                    self.firehose.sector_size = ss;
-                }
-                if let Some(ts) = storage_resp.total_sectors {
-                    tracing::debug!("Total sectors: {}", ts);
-                    self.firehose.total_sectors = ts;
+                if storage_resp.config.sector_size.is_some() || storage_resp.config.total_sectors.is_some() {
+                    tracing::debug!(
+                        "Storage info: sector_size={:?}, total_sectors={:?}",
+                        storage_resp.config.sector_size,
+                        storage_resp.config.total_sectors
+                    );
+                    self.firehose
+                        .update_from_storage_info(storage_resp.config.sector_size, storage_resp.config.total_sectors);
                 }
                 if let Some(ref mut session) = self.session {
-                    session.firehose.sector_size = self.firehose.sector_size;
-                    session.firehose.max_payload_size = self.firehose.max_payload_size;
-                    session.capabilities.memory_type = self.firehose.memory_name.clone();
-                    session.capabilities.total_sectors = self.firehose.total_sectors;
+                    session.update_from_firehose(
+                        self.firehose.sector_size(),
+                        self.firehose.max_payload_size(),
+                        self.firehose.max_payload_size_from_target(),
+                        self.firehose.max_payload_size_to_target_supported(),
+                        self.firehose.max_xml_size(),
+                        self.firehose.target_name(),
+                        self.firehose.version(),
+                        self.firehose.memory_name(),
+                        self.firehose.total_sectors(),
+                    );
                 }
             }
             Err(e) => {
@@ -644,11 +723,11 @@ impl JobContext for JobExecutor {
     }
 
     fn storage_name(&self) -> &str {
-        &self.firehose.memory_name
+        self.firehose.memory_name()
     }
 
     fn total_sectors(&self) -> u64 {
-        self.firehose.total_sectors
+        self.firehose.total_sectors()
     }
 
     fn find_partition(&self, name: &str) -> Option<&PartitionInfo> {
@@ -693,15 +772,11 @@ impl JobContext for JobExecutor {
                 reason: "transport not initialized".to_string(),
             })?;
         let resp = self.firehose.get_storage_info(transport.as_mut()).await?;
-        if let Some(memory_name) = resp.memory_name {
-            self.firehose.memory_name = memory_name;
+        if let Some(memory_name) = resp.config.memory_name {
+            self.firehose.set_memory_name(memory_name);
         }
-        if let Some(sector_size) = resp.sector_size {
-            self.firehose.sector_size = sector_size;
-        }
-        if let Some(total_sectors) = resp.total_sectors {
-            self.firehose.total_sectors = total_sectors;
-        }
+        self.firehose
+            .update_from_storage_info(resp.config.sector_size, resp.config.total_sectors);
         Ok(resp.logs)
     }
 
@@ -741,9 +816,8 @@ impl JobContext for JobExecutor {
         Ok(())
     }
 
-    fn progress(&self) -> &dyn ProgressReporter {
-        static NOOP: NoopProgress = NoopProgress;
-        &NOOP
+    fn progress(&self) -> Arc<dyn ProgressReporter> {
+        self.progress_reporter.clone().unwrap_or_else(|| Arc::new(NoopProgress))
     }
 
     fn session(&self) -> Option<&Session> {

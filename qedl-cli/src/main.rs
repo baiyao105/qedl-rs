@@ -59,7 +59,8 @@ async fn main() -> color_eyre::Result<()> {
         .dry_run(cli.global.dry_run)
         .verbose(cli.global.verbose > 0)
         .auto_edl_switch(!cli.global.no_switch_edl)
-        .spinner_factory(|msg| Box::new(Spinner::new(msg)));
+        .spinner_factory(|msg| Box::new(Spinner::new(msg)))
+        .progress_factory(|| Box::new(output::IndicatifProgress::new()));
 
     if let Some(ref port) = cli.global.port {
         builder = builder.port(port.as_str());

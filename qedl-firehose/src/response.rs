@@ -1,15 +1,9 @@
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-#[derive(Debug, Clone)]
-pub struct FirehoseResponse {
-    pub value: ResponseValue,
-    pub raw_mode: bool,
-    /// Error message from NAK response. Only populated when value is Nak.
-    pub error: Option<String>,
-    /// Log messages from `<log>` tags. Printed at TRACE level.
-    pub logs: Vec<String>,
-
+/// Device configuration returned by Firehose configure and getstorageinfo responses.
+#[derive(Debug, Clone, Default)]
+pub struct FirehoseConfig {
     pub memory_name: Option<String>,
     pub sector_size: Option<u32>,
     pub max_payload_size: Option<u32>,
@@ -21,6 +15,18 @@ pub struct FirehoseResponse {
     pub total_sectors: Option<u64>,
     pub num_partition_sectors: Option<u64>,
     pub physical_partition_number: Option<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FirehoseResponse {
+    pub value: ResponseValue,
+    pub raw_mode: bool,
+    /// Error message from NAK response. Only populated when value is Nak.
+    pub error: Option<String>,
+    /// Log messages from `<log>` tags. Printed at TRACE level.
+    pub logs: Vec<String>,
+    /// Device configuration fields (only populated by configure/getstorageinfo responses).
+    pub config: FirehoseConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,17 +45,7 @@ impl FirehoseResponse {
         let mut raw_mode = false;
         let mut error: Option<String> = None;
         let mut logs: Vec<String> = Vec::new();
-        let mut memory_name: Option<String> = None;
-        let mut sector_size: Option<u32> = None;
-        let mut max_payload_size: Option<u32> = None;
-        let mut max_payload_size_from_target: Option<u32> = None;
-        let mut max_payload_size_to_target_supported: Option<u32> = None;
-        let mut max_xml_size: Option<u32> = None;
-        let mut target_name: Option<String> = None;
-        let mut version: Option<String> = None;
-        let mut total_sectors: Option<u64> = None;
-        let mut num_partition_sectors: Option<u64> = None;
-        let mut physical_partition_number: Option<u8> = None;
+        let mut config = FirehoseConfig::default();
         let mut in_log = false;
         let mut log_text = String::new();
 
@@ -87,48 +83,48 @@ impl FirehoseResponse {
                     }
 
                     if tag_lower == "memory" || tag_lower == "memoryname" {
-                        memory_name = get_attr(e, "name")
+                        config.memory_name = get_attr(e, "name")
                             .or_else(|| get_attr(e, "MemoryName"))
                             .or_else(|| get_attr(e, "memory"));
                     }
 
-                    if sector_size.is_none() {
-                        sector_size = get_attr_u32(e, "SECTOR_SIZE_IN_BYTES")
+                    if config.sector_size.is_none() {
+                        config.sector_size = get_attr_u32(e, "SECTOR_SIZE_IN_BYTES")
                             .or_else(|| get_attr_u32(e, "sector_size"))
                             .or_else(|| get_attr_u32(e, "SectorSize"));
                     }
-                    if max_payload_size.is_none() {
-                        max_payload_size = get_attr_u32(e, "MaxPayloadSizeToTargetInBytes")
+                    if config.max_payload_size.is_none() {
+                        config.max_payload_size = get_attr_u32(e, "MaxPayloadSizeToTargetInBytes")
                             .or_else(|| get_attr_u32(e, "MaxPayloadSizeToTarget"))
                             .or_else(|| get_attr_u32(e, "max_payload_size"))
                             .or_else(|| get_attr_u32(e, "MaxPayloadSize"));
                     }
-                    if max_payload_size_from_target.is_none() {
-                        max_payload_size_from_target = get_attr_u32(e, "MaxPayloadSizeFromTargetInBytes");
+                    if config.max_payload_size_from_target.is_none() {
+                        config.max_payload_size_from_target = get_attr_u32(e, "MaxPayloadSizeFromTargetInBytes");
                     }
-                    if max_payload_size_to_target_supported.is_none() {
-                        max_payload_size_to_target_supported =
+                    if config.max_payload_size_to_target_supported.is_none() {
+                        config.max_payload_size_to_target_supported =
                             get_attr_u32(e, "MaxPayloadSizeToTargetInBytesSupported");
                     }
-                    if max_xml_size.is_none() {
-                        max_xml_size = get_attr_u32(e, "MaxXMLSizeInBytes");
+                    if config.max_xml_size.is_none() {
+                        config.max_xml_size = get_attr_u32(e, "MaxXMLSizeInBytes");
                     }
-                    if target_name.is_none() {
-                        target_name = get_attr(e, "TargetName");
+                    if config.target_name.is_none() {
+                        config.target_name = get_attr(e, "TargetName");
                     }
-                    if version.is_none() {
-                        version = get_attr(e, "Version");
+                    if config.version.is_none() {
+                        config.version = get_attr(e, "Version");
                     }
-                    if total_sectors.is_none() {
-                        total_sectors = get_attr_u64(e, "total_sectors")
+                    if config.total_sectors.is_none() {
+                        config.total_sectors = get_attr_u64(e, "total_sectors")
                             .or_else(|| get_attr_u64(e, "TotalSectors"))
                             .or_else(|| get_attr_u64(e, "num_partition_sectors"));
                     }
-                    if num_partition_sectors.is_none() {
-                        num_partition_sectors = get_attr_u64(e, "num_partition_sectors");
+                    if config.num_partition_sectors.is_none() {
+                        config.num_partition_sectors = get_attr_u64(e, "num_partition_sectors");
                     }
-                    if physical_partition_number.is_none() {
-                        physical_partition_number = get_attr_u32(e, "physical_partition_number")
+                    if config.physical_partition_number.is_none() {
+                        config.physical_partition_number = get_attr_u32(e, "physical_partition_number")
                             .or_else(|| get_attr_u32(e, "PhysicalPartitionNumber"))
                             .map(|v| v as u8);
                     }
@@ -165,17 +161,7 @@ impl FirehoseResponse {
             raw_mode,
             error,
             logs,
-            memory_name,
-            sector_size,
-            max_payload_size,
-            max_payload_size_from_target,
-            max_payload_size_to_target_supported,
-            max_xml_size,
-            target_name,
-            version,
-            total_sectors,
-            num_partition_sectors,
-            physical_partition_number,
+            config,
         })
     }
 
@@ -185,5 +171,49 @@ impl FirehoseResponse {
 
     pub fn is_nak(&self) -> bool {
         self.value == ResponseValue::Nak
+    }
+
+    pub fn memory_name(&self) -> Option<&str> {
+        self.config.memory_name.as_deref()
+    }
+
+    pub fn sector_size(&self) -> Option<u32> {
+        self.config.sector_size
+    }
+
+    pub fn total_sectors(&self) -> Option<u64> {
+        self.config.total_sectors
+    }
+
+    pub fn max_payload_size(&self) -> Option<u32> {
+        self.config.max_payload_size
+    }
+
+    pub fn max_payload_size_from_target(&self) -> Option<u32> {
+        self.config.max_payload_size_from_target
+    }
+
+    pub fn max_payload_size_to_target_supported(&self) -> Option<u32> {
+        self.config.max_payload_size_to_target_supported
+    }
+
+    pub fn max_xml_size(&self) -> Option<u32> {
+        self.config.max_xml_size
+    }
+
+    pub fn target_name(&self) -> Option<&str> {
+        self.config.target_name.as_deref()
+    }
+
+    pub fn version(&self) -> Option<&str> {
+        self.config.version.as_deref()
+    }
+
+    pub fn num_partition_sectors(&self) -> Option<u64> {
+        self.config.num_partition_sectors
+    }
+
+    pub fn physical_partition_number(&self) -> Option<u8> {
+        self.config.physical_partition_number
     }
 }

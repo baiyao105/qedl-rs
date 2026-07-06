@@ -178,7 +178,7 @@ async fn test_configure_updates_client_fields() {
 
     assert_eq!(client.sector_size(), 4096);
     assert_eq!(client.max_payload_size(), 2097152);
-    assert_eq!(client.total_sectors, 8388608);
+    assert_eq!(client.total_sectors(), 8388608);
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
-use indicatif::ProgressStyle;
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use owo_colors::OwoColorize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
@@ -196,5 +196,44 @@ pub fn hex_dump_display(data: &[u8]) {
             .collect();
 
         println!("    {:08X}  {:<49}  |{}|", offset, hex, ascii);
+    }
+}
+
+pub struct IndicatifProgress {
+    pb: Mutex<Option<ProgressBar>>,
+}
+
+impl IndicatifProgress {
+    pub fn new() -> Self {
+        Self { pb: Mutex::new(None) }
+    }
+}
+
+impl Default for IndicatifProgress {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl qedl::ProgressReporter for IndicatifProgress {
+    fn start(&self, total: u64, _message: &str) {
+        let style = ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
+            .expect("valid progress template")
+            .progress_chars("#>-");
+        let pb = ProgressBar::with_draw_target(Some(total), ProgressDrawTarget::stdout()).with_style(style);
+        *self.pb.lock().unwrap() = Some(pb);
+    }
+
+    fn update(&self, current: u64) {
+        if let Some(ref pb) = *self.pb.lock().unwrap() {
+            pb.set_position(current);
+        }
+    }
+
+    fn finish(&self, message: &str) {
+        if let Some(pb) = self.pb.lock().unwrap().take() {
+            pb.finish_with_message(message.to_string());
+        }
     }
 }

@@ -66,12 +66,12 @@ impl<T: Transport> SaharaSession<T> {
     /// 5. Loop ReadData requests, upload loader
     /// 6. Send Done, device enters Firehose mode
     ///
-    /// Consumes self and returns (transport, device_info) on success.
+    /// Runs the Sahara handshake, borrowing self so the session can be reused after failure.
     pub async fn handshake(
-        mut self,
+        &mut self,
         loader_path: Option<&Path>,
         mode: SaharaMode,
-    ) -> std::result::Result<(T, SaharaDeviceInfo), SaharaError> {
+    ) -> std::result::Result<SaharaDeviceInfo, SaharaError> {
         tracing::info!("Sahara handshake started");
         self.emit(SaharaEvent::HandshakeStarted);
         let start = std::time::Instant::now();
@@ -81,7 +81,7 @@ impl<T: Transport> SaharaSession<T> {
             Err(SaharaError::AlreadyInFirehose) => {
                 tracing::info!("Device already in Firehose mode, skipping Sahara");
                 self.emit(SaharaEvent::AlreadyInFirehoseMode);
-                return Ok((self.transport, SaharaDeviceInfo::default()));
+                return Ok(SaharaDeviceInfo::default());
             }
             Err(SaharaError::HelloFailed) => {
                 // Hello not received, try NOP to check if device is in Firehose mode
@@ -89,7 +89,7 @@ impl<T: Transport> SaharaSession<T> {
                 if self.try_firehose_nop().await {
                     tracing::info!("Device is in Firehose mode (NOP ACK received)");
                     self.emit(SaharaEvent::AlreadyInFirehoseMode);
-                    return Ok((self.transport, SaharaDeviceInfo::default()));
+                    return Ok(SaharaDeviceInfo::default());
                 }
                 // No loader specified — cannot proceed with Sahara
                 if loader_path.is_none() {
@@ -103,7 +103,7 @@ impl<T: Transport> SaharaSession<T> {
                     Err(SaharaError::AlreadyInFirehose) => {
                         tracing::info!("Device already in Firehose mode after PblHack, skipping Sahara");
                         self.emit(SaharaEvent::AlreadyInFirehoseMode);
-                        return Ok((self.transport, SaharaDeviceInfo::default()));
+                        return Ok(SaharaDeviceInfo::default());
                     }
                     Err(e) => return Err(e),
                 }
@@ -162,7 +162,19 @@ impl<T: Transport> SaharaSession<T> {
         self.state = SaharaState::Done;
         self.emit(SaharaEvent::HandshakeComplete);
         tracing::info!("Sahara handshake complete ({:.1}s)", start.elapsed().as_secs_f64());
-        Ok((self.transport, device_info))
+        Ok(device_info)
+    }
+
+    pub fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    pub fn transport_mut(&mut self) -> &mut T {
+        &mut self.transport
+    }
+
+    pub fn into_transport(self) -> T {
+        self.transport
     }
 
     async fn read_hello(&mut self) -> Result<SaharaHello> {

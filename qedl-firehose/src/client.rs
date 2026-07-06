@@ -1,6 +1,7 @@
 use crate::command::FirehoseCommand;
 use crate::error::{FirehoseError, Result};
 use crate::response::FirehoseResponse;
+use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use qedl_core::{Event, EventSink, FirehoseEvent, emit_event};
 use qedl_transport::Transport;
@@ -10,15 +11,15 @@ use std::time::Duration;
 const READ_BUF_SIZE: usize = 64 * 1024;
 
 pub struct FirehoseClient {
-    pub memory_name: String,
-    pub sector_size: u32,
-    pub max_payload_size: u32,
-    pub max_payload_size_from_target: Option<u32>,
-    pub max_payload_size_to_target_supported: Option<u32>,
-    pub max_xml_size: Option<u32>,
-    pub target_name: String,
-    pub version: Option<String>,
-    pub total_sectors: u64,
+    pub(crate) memory_name: String,
+    pub(crate) sector_size: u32,
+    pub(crate) max_payload_size: u32,
+    pub(crate) max_payload_size_from_target: Option<u32>,
+    pub(crate) max_payload_size_to_target_supported: Option<u32>,
+    pub(crate) max_xml_size: Option<u32>,
+    pub(crate) target_name: String,
+    pub(crate) version: Option<String>,
+    pub(crate) total_sectors: u64,
     initialized: bool,
     /// Buffer for leftover bytes from read_response that belong to raw data, not XML
     leftover: BytesMut,
@@ -72,31 +73,31 @@ impl FirehoseClient {
             });
         }
 
-        if let Some(name) = &resp.memory_name {
+        if let Some(name) = &resp.config.memory_name {
             self.memory_name = name.clone();
         }
-        if let Some(ss) = resp.sector_size {
+        if let Some(ss) = resp.config.sector_size {
             self.sector_size = ss;
         }
-        if let Some(mps) = resp.max_payload_size {
+        if let Some(mps) = resp.config.max_payload_size {
             self.max_payload_size = mps;
         }
-        if let Some(mpsft) = resp.max_payload_size_from_target {
+        if let Some(mpsft) = resp.config.max_payload_size_from_target {
             self.max_payload_size_from_target = Some(mpsft);
         }
-        if let Some(mpstts) = resp.max_payload_size_to_target_supported {
+        if let Some(mpstts) = resp.config.max_payload_size_to_target_supported {
             self.max_payload_size_to_target_supported = Some(mpstts);
         }
-        if let Some(mxs) = resp.max_xml_size {
+        if let Some(mxs) = resp.config.max_xml_size {
             self.max_xml_size = Some(mxs);
         }
-        if let Some(ts) = resp.target_name {
+        if let Some(ts) = resp.config.target_name {
             self.target_name = ts;
         }
-        if let Some(v) = resp.version {
+        if let Some(v) = resp.config.version {
             self.version = Some(v);
         }
-        if let Some(ts) = resp.total_sectors {
+        if let Some(ts) = resp.config.total_sectors {
             self.total_sectors = ts;
         }
 
@@ -715,10 +716,167 @@ impl FirehoseClient {
     pub fn is_initialized(&self) -> bool {
         self.initialized
     }
+
+    pub fn memory_name(&self) -> &str {
+        &self.memory_name
+    }
+
+    pub fn target_name(&self) -> &str {
+        &self.target_name
+    }
+
+    pub fn version(&self) -> Option<&str> {
+        self.version.as_deref()
+    }
+
+    pub fn max_payload_size_from_target(&self) -> Option<u32> {
+        self.max_payload_size_from_target
+    }
+
+    pub fn max_payload_size_to_target_supported(&self) -> Option<u32> {
+        self.max_payload_size_to_target_supported
+    }
+
+    pub fn max_xml_size(&self) -> Option<u32> {
+        self.max_xml_size
+    }
+
+    pub fn total_sectors(&self) -> u64 {
+        self.total_sectors
+    }
+
+    /// Update sector_size and total_sectors from a getstorageinfo response.
+    pub fn update_from_storage_info(&mut self, sector_size: Option<u32>, total_sectors: Option<u64>) {
+        if let Some(ss) = sector_size {
+            self.sector_size = ss;
+        }
+        if let Some(ts) = total_sectors {
+            self.total_sectors = ts;
+        }
+    }
+
+    pub fn set_memory_name(&mut self, name: String) {
+        self.memory_name = name;
+    }
 }
 
 impl Default for FirehoseClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[async_trait]
+impl crate::FirehoseProtocol for FirehoseClient {
+    async fn configure(&mut self, transport: &mut dyn Transport) -> Result<()> {
+        self.configure(transport).await
+    }
+    async fn execute_command(
+        &mut self,
+        transport: &mut dyn Transport,
+        command: &crate::command::FirehoseCommand,
+    ) -> Result<FirehoseResponse> {
+        self.execute_command(transport, command).await
+    }
+    async fn read_sectors(
+        &mut self,
+        transport: &mut dyn Transport,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<Bytes> {
+        self.read_sectors(transport, physical_partition, start_sector, num_sectors)
+            .await
+    }
+    async fn program_sectors(
+        &mut self,
+        transport: &mut dyn Transport,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+        data: &[u8],
+    ) -> Result<()> {
+        self.program_sectors(transport, physical_partition, start_sector, num_sectors, data)
+            .await
+    }
+    async fn erase_sectors(
+        &mut self,
+        transport: &mut dyn Transport,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<()> {
+        self.erase_sectors(transport, physical_partition, start_sector, num_sectors)
+            .await
+    }
+    async fn get_storage_info(&mut self, transport: &mut dyn Transport) -> Result<FirehoseResponse> {
+        self.get_storage_info(transport).await
+    }
+    async fn get_sha256_digest(
+        &mut self,
+        transport: &mut dyn Transport,
+        physical_partition: u8,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<String> {
+        self.get_sha256_digest(transport, physical_partition, start_sector, num_sectors)
+            .await
+    }
+    async fn peek(&mut self, transport: &mut dyn Transport, address: u64, size: u32) -> Result<Vec<u8>> {
+        self.peek(transport, address, size).await
+    }
+    async fn poke(&mut self, transport: &mut dyn Transport, address: u64, data: &[u8]) -> Result<()> {
+        self.poke(transport, address, data).await
+    }
+    async fn reboot(&mut self, transport: &mut dyn Transport) -> Result<()> {
+        self.reboot(transport).await
+    }
+    async fn raw_xml(&mut self, transport: &mut dyn Transport, xml: &str) -> Result<FirehoseResponse> {
+        self.raw_xml(transport, xml).await
+    }
+    async fn drain_initial_messages(&mut self, transport: &mut dyn Transport) -> Result<()> {
+        self.drain_initial_messages(transport).await
+    }
+
+    fn sector_size(&self) -> u32 {
+        self.sector_size
+    }
+    fn max_payload_size(&self) -> u32 {
+        self.max_payload_size
+    }
+    fn is_initialized(&self) -> bool {
+        self.initialized
+    }
+    fn memory_name(&self) -> &str {
+        &self.memory_name
+    }
+    fn target_name(&self) -> &str {
+        &self.target_name
+    }
+    fn version(&self) -> Option<&str> {
+        self.version.as_deref()
+    }
+    fn max_payload_size_from_target(&self) -> Option<u32> {
+        self.max_payload_size_from_target
+    }
+    fn max_payload_size_to_target_supported(&self) -> Option<u32> {
+        self.max_payload_size_to_target_supported
+    }
+    fn max_xml_size(&self) -> Option<u32> {
+        self.max_xml_size
+    }
+    fn total_sectors(&self) -> u64 {
+        self.total_sectors
+    }
+    fn update_from_storage_info(&mut self, sector_size: Option<u32>, total_sectors: Option<u64>) {
+        if let Some(ss) = sector_size {
+            self.sector_size = ss;
+        }
+        if let Some(ts) = total_sectors {
+            self.total_sectors = ts;
+        }
+    }
+    fn set_memory_name(&mut self, name: String) {
+        self.memory_name = name;
     }
 }

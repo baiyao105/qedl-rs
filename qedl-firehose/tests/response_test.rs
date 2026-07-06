@@ -21,9 +21,9 @@ fn test_parse_ack_with_sector_info() {
     let xml = r#"<response value="ACK" SECTOR_SIZE_IN_BYTES="4096" num_partition_sectors="2048" physical_partition_number="0" />"#;
     let resp = FirehoseResponse::from_xml(xml).unwrap();
     assert!(resp.is_ack());
-    assert_eq!(resp.sector_size, Some(4096));
-    assert_eq!(resp.num_partition_sectors, Some(2048));
-    assert_eq!(resp.physical_partition_number, Some(0));
+    assert_eq!(resp.sector_size(), Some(4096));
+    assert_eq!(resp.num_partition_sectors(), Some(2048));
+    assert_eq!(resp.physical_partition_number(), Some(0));
 }
 
 #[test]
@@ -31,10 +31,10 @@ fn test_parse_configure_response() {
     let xml = r#"<data><response value="ACK" SECTOR_SIZE_IN_BYTES="4096" MaxPayloadSizeToTargetInBytes="2097152" total_sectors="4194304" /><memory MemoryName="UFS" /></data>"#;
     let resp = FirehoseResponse::from_xml(xml).unwrap();
     assert!(resp.is_ack());
-    assert_eq!(resp.memory_name.as_deref(), Some("UFS"));
-    assert_eq!(resp.sector_size, Some(4096));
-    assert_eq!(resp.max_payload_size, Some(2097152));
-    assert_eq!(resp.total_sectors, Some(4194304));
+    assert_eq!(resp.memory_name(), Some("UFS"));
+    assert_eq!(resp.sector_size(), Some(4096));
+    assert_eq!(resp.max_payload_size(), Some(2097152));
+    assert_eq!(resp.total_sectors(), Some(4194304));
 }
 
 #[test]

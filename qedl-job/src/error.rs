@@ -11,6 +11,7 @@ pub enum JobError {
     #[error("transport error: {0}")]
     Transport(#[from] qedl_transport::TransportError),
 
+    #[cfg(feature = "sahara")]
     #[error("sahara error: {0}")]
     Sahara(#[from] qedl_sahara::SaharaError),
 
@@ -36,6 +37,7 @@ impl From<JobError> for qedl_core::QedlError {
             JobError::StepFailed { .. } => qedl_core::ErrorCode::JobStepFailed,
             JobError::PreconditionFailed { .. } => qedl_core::ErrorCode::JobPreconditionFailed,
             JobError::Transport(_) => qedl_core::ErrorCode::TransportIo,
+            #[cfg(feature = "sahara")]
             JobError::Sahara(_) => qedl_core::ErrorCode::SaharaHelloFailed,
             JobError::Firehose(_) => qedl_core::ErrorCode::FirehoseNak,
             JobError::Storage(_) => qedl_core::ErrorCode::StoragePartitionNotFound,

@@ -38,6 +38,9 @@ pub enum ErrorCode {
     InvalidArgument,
 
     XmlParse,
+
+    /// Custom error code for external extensions. (code, display_name)
+    Custom(u32, &'static str),
 }
 
 impl ErrorCode {
@@ -72,6 +75,7 @@ impl ErrorCode {
             Self::LoaderNotFound => "LOADER_NOT_FOUND",
             Self::InvalidArgument => "INVALID_ARGUMENT",
             Self::XmlParse => "XML_PARSE",
+            Self::Custom(_, name) => name,
         }
     }
 }

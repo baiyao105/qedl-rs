@@ -1,4 +1,5 @@
 use crate::error::Result;
+use async_trait::async_trait;
 use qedl_core::{DeviceState, PartitionInfo, Session};
 #[cfg(feature = "sparse")]
 use qedl_job::VerifyJob;
@@ -8,6 +9,27 @@ use qedl_job::{
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Trait abstracting the high-level QEDL client interface.
+/// Enables mock testing and custom client implementations.
+#[async_trait]
+pub trait QedlClientTrait: Send + Sync {
+    fn state(&self) -> DeviceState;
+    fn session(&self) -> Option<&Session>;
+    fn partitions(&self) -> &[PartitionInfo];
+
+    fn connect(&mut self) -> Result<()>;
+    async fn handshake(&mut self) -> Result<()>;
+    async fn init_firehose(&mut self) -> Result<()>;
+    async fn load_gpt(&mut self) -> Result<()>;
+    async fn init(&mut self) -> Result<()>;
+    async fn init_firehose_only(&mut self) -> Result<()>;
+
+    async fn raw_xml(&mut self, xml: &str) -> Result<JobResult>;
+    async fn peek(&mut self, address: u64, size: u32) -> Result<Vec<u8>>;
+    async fn poke(&mut self, address: u64, data: &[u8]) -> Result<()>;
+    async fn reboot(&mut self) -> Result<()>;
+}
 
 /// High-level client for Qualcomm EDL (Firehose) device communication.
 pub struct QedlClient {
@@ -219,15 +241,48 @@ impl QedlClient {
         self.executor.reboot().await?;
         Ok(())
     }
+}
 
-    /// Returns a mutable reference to the underlying job executor.
-    pub fn executor_mut(&mut self) -> &mut JobExecutor {
-        &mut self.executor
+#[async_trait]
+impl QedlClientTrait for QedlClient {
+    fn state(&self) -> DeviceState {
+        self.state()
     }
-
-    /// Returns a reference to the underlying job executor.
-    pub fn executor(&self) -> &JobExecutor {
-        &self.executor
+    fn session(&self) -> Option<&Session> {
+        self.session()
+    }
+    fn partitions(&self) -> &[PartitionInfo] {
+        self.partitions()
+    }
+    fn connect(&mut self) -> Result<()> {
+        self.connect()
+    }
+    async fn handshake(&mut self) -> Result<()> {
+        self.handshake().await
+    }
+    async fn init_firehose(&mut self) -> Result<()> {
+        self.init_firehose().await
+    }
+    async fn load_gpt(&mut self) -> Result<()> {
+        self.load_gpt().await
+    }
+    async fn init(&mut self) -> Result<()> {
+        self.init().await
+    }
+    async fn init_firehose_only(&mut self) -> Result<()> {
+        self.init_firehose_only().await
+    }
+    async fn raw_xml(&mut self, xml: &str) -> Result<JobResult> {
+        self.raw_xml(xml).await
+    }
+    async fn peek(&mut self, address: u64, size: u32) -> Result<Vec<u8>> {
+        self.peek(address, size).await
+    }
+    async fn poke(&mut self, address: u64, data: &[u8]) -> Result<()> {
+        self.poke(address, data).await
+    }
+    async fn reboot(&mut self) -> Result<()> {
+        self.reboot().await
     }
 }
 
@@ -243,6 +298,8 @@ pub struct QedlClientBuilder {
     event_sink: Option<Arc<dyn qedl_core::EventSink>>,
     auto_edl_switch: bool,
     spinner_factory: Option<qedl_job::SpinnerFactory>,
+    progress_factory: Option<qedl_job::ProgressFactory>,
+    extras: std::collections::HashMap<String, Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl QedlClientBuilder {
@@ -259,6 +316,8 @@ impl QedlClientBuilder {
             event_sink: None,
             auto_edl_switch: true,
             spinner_factory: None,
+            progress_factory: None,
+            extras: std::collections::HashMap::new(),
         }
     }
 
@@ -325,6 +384,21 @@ impl QedlClientBuilder {
         self
     }
 
+    /// Sets the progress factory for creating progress bars during long operations.
+    pub fn progress_factory(
+        mut self,
+        factory: impl Fn() -> Box<dyn qedl_core::ProgressReporter + Send> + Send + Sync + 'static,
+    ) -> Self {
+        self.progress_factory = Some(Arc::new(factory));
+        self
+    }
+
+    /// Sets a custom extension value in the executor configuration.
+    pub fn extra(mut self, key: impl Into<String>, value: Box<dyn std::any::Any + Send + Sync>) -> Self {
+        self.extras.insert(key.into(), value);
+        self
+    }
+
     /// Builds and returns the configured `QedlClient`.
     pub fn build(self) -> QedlClient {
         let config = ExecutorConfig {
@@ -338,6 +412,8 @@ impl QedlClientBuilder {
             event_sink: self.event_sink,
             auto_edl_switch: self.auto_edl_switch,
             spinner_factory: self.spinner_factory,
+            progress_factory: self.progress_factory,
+            extras: self.extras,
         };
 
         QedlClient::from_config(config)

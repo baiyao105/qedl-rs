@@ -10,6 +10,9 @@ pub use qedl_core::DeviceInfo;
 pub const QUALCOMM_VID: u16 = 0x05C6;
 pub const QUALCOMM_9008_PID: u16 = 0x9008;
 
+/// Known Qualcomm DIAG mode PIDs (fallback when interface descriptor unavailable).
+pub const DIAG_PIDS: &[u16] = &[0x90B8, 0x9091, 0x90E8];
+
 fn serialport_error_to_io(e: serialport::Error) -> std::io::Error {
     std::io::Error::other(e.to_string())
 }
@@ -136,6 +139,37 @@ fn query_device_mode(vid: u16, pid: u16) -> DeviceMode {
     }
 
     DeviceMode::Unknown
+}
+
+/// Trait abstracting device discovery.
+/// Enables network devices, virtual devices, or custom selection logic.
+pub trait DeviceEnumeratorTrait {
+    /// List all Qualcomm devices (filtering by VID)
+    fn list(&self) -> Result<Vec<DeviceInfo>>;
+
+    /// List all devices without filtering
+    fn list_all(&self) -> Result<Vec<DeviceInfo>>;
+
+    /// Auto-select the best device
+    fn auto_select(&self) -> Result<DeviceInfo>;
+
+    /// Find device by port name
+    fn find_by_port(&self, port: &str) -> Result<DeviceInfo>;
+
+    /// Find device by serial number
+    fn find_by_serial(&self, serial: &str) -> Result<DeviceInfo>;
+
+    /// Wait for a device to appear
+    fn wait_for_device(
+        &self,
+        port: Option<&str>,
+        serial: Option<&str>,
+        timeout_secs: Option<u64>,
+        poll_interval_ms: u64,
+    ) -> Result<DeviceInfo>;
+
+    /// Switch DIAG device to EDL mode
+    fn switch_diag_to_edl(&self, port_name: &str, timeout_secs: u64) -> Result<()>;
 }
 
 pub struct DeviceEnumerator;
@@ -440,5 +474,35 @@ impl DeviceEnumerator {
 
             std::thread::sleep(Duration::from_millis(500));
         }
+    }
+}
+
+impl DeviceEnumeratorTrait for DeviceEnumerator {
+    fn list(&self) -> Result<Vec<DeviceInfo>> {
+        Self::list()
+    }
+    fn list_all(&self) -> Result<Vec<DeviceInfo>> {
+        Self::list_all()
+    }
+    fn auto_select(&self) -> Result<DeviceInfo> {
+        Self::auto_select()
+    }
+    fn find_by_port(&self, port: &str) -> Result<DeviceInfo> {
+        Self::find_by_port(port)
+    }
+    fn find_by_serial(&self, serial: &str) -> Result<DeviceInfo> {
+        Self::find_by_serial(serial)
+    }
+    fn wait_for_device(
+        &self,
+        port: Option<&str>,
+        serial: Option<&str>,
+        timeout_secs: Option<u64>,
+        poll_interval_ms: u64,
+    ) -> Result<DeviceInfo> {
+        Self::wait_for_device(port, serial, timeout_secs, poll_interval_ms)
+    }
+    fn switch_diag_to_edl(&self, port_name: &str, timeout_secs: u64) -> Result<()> {
+        Self::switch_diag_to_edl(port_name, timeout_secs)
     }
 }

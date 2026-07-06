@@ -24,7 +24,7 @@ qedl-image = { workspace = true, optional = true }
 [features]
 default = ["full"]
 full = ["sahara", "sparse", "gui"]
-sahara = ["dep:qedl-sahara"]
+sahara = ["dep:qedl-sahara", "qedl-job/sahara"]
 sparse = ["dep:qedl-image", "qedl-job/sparse"]
 gui = ["qedl-core/gui"]
 minimal = []

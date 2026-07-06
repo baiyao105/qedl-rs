@@ -40,6 +40,9 @@ pub struct DeviceInfo {
 }
 
 /// Known Qualcomm DIAG mode PIDs (fallback when interface descriptor unavailable).
+///
+/// **Deprecated:** Use `qedl_transport::DIAG_PIDS` instead.
+#[deprecated(since = "0.2.0", note = "use qedl_transport::DIAG_PIDS instead")]
 pub const DIAG_PIDS: &[u16] = &[0x90B8, 0x9091, 0x90E8];
 
 impl DeviceInfo {
@@ -58,9 +61,10 @@ impl DeviceInfo {
     /// Returns true if this device is in any Qualcomm DIAG mode.
     /// Uses interface descriptor when available, falls back to PID heuristic.
     pub fn is_diag(&self) -> bool {
+        const LOCAL_DIAG_PIDS: &[u16] = &[0x90B8, 0x9091, 0x90E8];
         match self.mode {
             DeviceMode::Diag => true,
-            DeviceMode::Unknown => self.vid == 0x05C6 && DIAG_PIDS.contains(&self.pid),
+            DeviceMode::Unknown => self.vid == 0x05C6 && LOCAL_DIAG_PIDS.contains(&self.pid),
             _ => false,
         }
     }

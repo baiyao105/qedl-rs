@@ -8,7 +8,6 @@ description = "GPT parsing and partition operations for Qualcomm EDL"
 
 [dependencies]
 qedl-core.workspace = true
-qedl-firehose.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
