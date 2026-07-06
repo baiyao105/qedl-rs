@@ -10,6 +10,12 @@ pub use qedl_core::DeviceInfo;
 pub const QUALCOMM_VID: u16 = 0x05C6;
 pub const QUALCOMM_9008_PID: u16 = 0x9008;
 
+/// Known Qualcomm EDL (emergency download) mode PIDs, used as fallback when
+/// USB interface descriptors cannot be queried.
+///
+/// Common PIDs include 0x9008 (most SoCs), 0x900E (SM8450/SM8550/SM8650+), 0x900D.
+pub const EDL_PIDS: &[u16] = &[0x9008, 0x900E, 0x900D];
+
 /// Known Qualcomm DIAG mode PIDs (fallback when interface descriptor unavailable).
 pub const DIAG_PIDS: &[u16] = &[0x90B8, 0x9091, 0x90E8];
 
@@ -76,8 +82,13 @@ fn diag_frame(cmd: u8, payload: &[u8]) -> Vec<u8> {
 /// - EDL (firehose): class=0xFF, subclass=0xFF, protocol=0xFF
 /// - DIAG:           class=0xFF, subclass=0xFF, protocol≠0xFF
 ///
+/// When `expected_serial` is provided (`Some(...)`), the function correlates the
+/// serial port to the physical USB device by serial number. This prevents mode
+/// misattribution when multiple identical Qualcomm devices (same VID/PID) are
+/// connected simultaneously.
+///
 /// Falls back to `DeviceMode::Unknown` if the device cannot be found or queried.
-fn query_device_mode(vid: u16, pid: u16) -> DeviceMode {
+fn query_device_mode(vid: u16, pid: u16, expected_serial: Option<&str>) -> DeviceMode {
     let devices = match rusb::DeviceList::new() {
         Ok(list) => list,
         Err(e) => {
@@ -86,13 +97,42 @@ fn query_device_mode(vid: u16, pid: u16) -> DeviceMode {
         }
     };
 
-    for device in devices.iter() {
+    'device_loop: for device in devices.iter() {
         let desc = match device.device_descriptor() {
             Ok(d) => d,
             Err(_) => continue,
         };
         if desc.vendor_id() != vid || desc.product_id() != pid {
             continue;
+        }
+
+        // When a serial number is available from the serial port driver, use it
+        // to correlate to the exact physical USB device. This prevents returning
+        // the mode from a different device when multiple identical Qualcomm
+        // devices are connected (same VID/PID but different serials).
+        if let Some(expected) = expected_serial {
+            let timeout = Duration::from_millis(500);
+            match device.open() {
+                Ok(handle) => {
+                    let langs = handle.read_languages(timeout).unwrap_or_default();
+                    if let Some(&lang) = langs.first() {
+                        match handle.read_serial_number_string(lang, &desc, timeout) {
+                            Ok(actual) if actual != expected => {
+                                // Definitively a different device — skip.
+                                continue 'device_loop;
+                            }
+                            _ => {
+                                // Serial matched or read failed (e.g. permission).
+                                // Proceed to mode detection.
+                            }
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Cannot open device (driver contention). Fall through to
+                    // VID+PID matching as best-effort.
+                }
+            }
         }
 
         let config = match device.active_config_descriptor() {
@@ -189,7 +229,11 @@ impl DeviceEnumerator {
                 continue;
             }
 
-            let mode = query_device_mode(vid, pid);
+            let serial_for_query = match &port.port_type {
+                serialport::SerialPortType::UsbPort(info) => info.serial_number.as_deref(),
+                _ => None,
+            };
+            let mode = query_device_mode(vid, pid, serial_for_query);
 
             let description = match &port.port_type {
                 serialport::SerialPortType::UsbPort(info) => Some(info.product.clone().unwrap_or_else(|| match mode {
@@ -234,7 +278,7 @@ impl DeviceEnumerator {
             let v = vid.unwrap_or(0);
             let p = pid.unwrap_or(0);
             let mode = if v == QUALCOMM_VID {
-                query_device_mode(v, p)
+                query_device_mode(v, p, serial.as_deref())
             } else {
                 DeviceMode::Unknown
             };
@@ -279,7 +323,10 @@ impl DeviceEnumerator {
     pub fn auto_select() -> Result<DeviceInfo> {
         let devices = Self::list()?;
 
-        // Prefer EDL over DIAG to avoid unnecessary mode switch
+        // Prefer EDL over DIAG to avoid unnecessary mode switch.
+        // Dedup by serial number only when serial is available — two serial-less
+        // devices are treated as potentially distinct, preventing silent
+        // collapse when multiple Qualcomm devices are connected without serials.
         let edl_groups: Vec<_> = devices
             .iter()
             .filter(|d| d.is_9008())
@@ -287,7 +334,7 @@ impl DeviceEnumerator {
             .collect::<Vec<_>>()
             .into_iter()
             .fold(Vec::<DeviceInfo>::new(), |mut acc, d| {
-                if acc.iter().any(|e| e.serial == d.serial) {
+                if d.serial.is_some() && acc.iter().any(|e| e.serial == d.serial) {
                     return acc;
                 }
                 acc.push(d);
@@ -359,7 +406,7 @@ impl DeviceEnumerator {
             let matched = devices.into_iter().find(|d| {
                 let port_ok = port.is_none_or(|p| d.port == p);
                 let serial_ok = serial.is_none_or(|s| d.serial.as_deref() == Some(s));
-                let qualcomm = d.vid == QUALCOMM_VID && (d.pid == QUALCOMM_9008_PID || d.is_diag());
+                let qualcomm = d.vid == QUALCOMM_VID && (d.is_9008() || d.is_diag());
                 port_ok && serial_ok && qualcomm
             });
 
@@ -454,12 +501,24 @@ impl DeviceEnumerator {
 
         tracing::info!("DIAG port closed, waiting for device to re-enumerate as 9008...");
 
-        let skipped_port = port_name.to_string();
+        // Record which 9008 devices were already present before the switch.
+        // After the switch, we wait for a *new* 9008 device to appear, which
+        // allows us to detect the switched device even when the OS re-uses
+        // the same COM port number (common on Linux with stable udev rules).
+        let preexisting_ports: Vec<String> = Self::list()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|d| d.is_9008())
+            .map(|d| d.port.clone())
+            .collect();
 
         let start = std::time::Instant::now();
         loop {
             let devices = Self::list()?;
-            if devices.iter().any(|d| d.is_9008() && d.port != skipped_port) {
+            if devices
+                .iter()
+                .any(|d| d.is_9008() && !preexisting_ports.contains(&d.port))
+            {
                 tracing::info!(
                     "Device re-enumerated as 9008 after {:.1}s",
                     start.elapsed().as_secs_f64()

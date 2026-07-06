@@ -46,10 +46,13 @@ pub struct DeviceInfo {
 pub const DIAG_PIDS: &[u16] = &[0x90B8, 0x9091, 0x90E8];
 
 impl DeviceInfo {
+    /// Returns true if the device is in EDL (9008) mode.
+    /// Uses interface descriptor when available; falls back to PID heuristic.
     pub fn is_9008(&self) -> bool {
+        const LOCAL_EDL_PIDS: &[u16] = &[0x9008, 0x900E, 0x900D];
         match self.mode {
             DeviceMode::Edl => true,
-            DeviceMode::Unknown => self.vid == 0x05C6 && self.pid == 0x9008,
+            DeviceMode::Unknown => self.vid == 0x05C6 && LOCAL_EDL_PIDS.contains(&self.pid),
             _ => false,
         }
     }
