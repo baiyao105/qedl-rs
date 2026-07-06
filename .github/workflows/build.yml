@@ -107,10 +107,12 @@ jobs:
   release:
     needs: [checks, build]
     if: (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.release == true)) && (needs.checks.outputs.check_passed == 'true' || needs.checks.outputs.skip_checks == 'true')
+    secrets: inherit
     permissions:
       id-token: write
       contents: write
+      attestations: write
     uses: ./.github/workflows/release.yml
     with:
-      artifact_name: qedl-${{ github.ref_name }}-${{ matrix.target }}
+      artifact_name: qedl-${{ github.ref_name }}-x86_64-pc-windows-msvc
       tag: ${{ inputs.tag || github.ref_name }}
