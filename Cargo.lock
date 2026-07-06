@@ -752,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "qedl"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "qedl-core",
@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "qedl-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "clap",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "qedl-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "hex",
  "humansize",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "qedl-firehose"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -817,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "qedl-image"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "crc32fast",
@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "qedl-job"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -851,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "qedl-sahara"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -864,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "qedl-storage"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "crc32fast",
  "qedl-core",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "qedl-transport"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",

@@ -80,13 +80,14 @@ jobs:
         run: |
           cd release-artifacts
           {
-            echo "Build Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            echo "Build ID: ${{ github.run_id }}"
-            echo "Commit: ${{ github.sha }}"
             echo ""
             echo "---"
             echo ""
             echo "## The File Information"
+            echo ""
+            echo "- Build Time: `$(date -u '+%Y-%m-%d %H:%M:%S UTC')`"
+            echo "- Build ID: [`${{ github.run_id }}`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo "- Commit: ${{ github.sha }}"
             echo ""
             echo '<div style="overflow-x: auto; white-space: nowrap;">'
             echo ""
@@ -128,6 +129,9 @@ jobs:
         id: auth
 
       - name: Publish
-        run: cargo publish
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev
+          cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

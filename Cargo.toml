@@ -13,7 +13,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
 authors = ["baiyao105"]
@@ -48,14 +48,14 @@ pretty_assertions = "1"
 tempfile = "3"
 insta = "1"
 
-qedl-core      = { path = "qedl-core" }
-qedl-transport = { path = "qedl-transport" }
-qedl-sahara    = { path = "qedl-sahara" }
-qedl-firehose  = { path = "qedl-firehose" }
-qedl-storage   = { path = "qedl-storage" }
-qedl-image     = { path = "qedl-image" }
-qedl-job       = { path = "qedl-job" }
-qedl           = { path = "qedl" }
+qedl-core      = { version = "0.2.1", path = "qedl-core" }
+qedl-transport = { version = "0.2.1", path = "qedl-transport" }
+qedl-sahara    = { version = "0.2.1", path = "qedl-sahara" }
+qedl-firehose  = { version = "0.2.1", path = "qedl-firehose" }
+qedl-storage   = { version = "0.2.1", path = "qedl-storage" }
+qedl-image     = { version = "0.2.1", path = "qedl-image" }
+qedl-job       = { version = "0.2.1", path = "qedl-job" }
+qedl           = { version = "0.2.1", path = "qedl" }
 
 [profile.release]
 lto = true
