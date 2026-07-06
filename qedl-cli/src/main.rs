@@ -1,4 +1,5 @@
 mod args;
+mod devices;
 mod output;
 
 use args::{Cli, Commands};
@@ -38,6 +39,11 @@ async fn main() -> color_eyre::Result<()> {
         .try_init()?;
 
     tracing::debug!("qedl-cli starting...");
+
+    // Handle `devices` subcommand early — it doesn't need a device connection
+    if let Commands::Devices { watch, json } = &cli.command {
+        return devices::run_devices(*watch, *json);
+    }
 
     if let Some(wait_secs) = cli.global.wait_device {
         let timeout = if wait_secs == 0 { None } else { Some(wait_secs) };
@@ -85,6 +91,7 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             device_list(&device_strs);
             Ok(())
         }
+        Commands::Devices { .. } => unreachable!(),
         Commands::Info => {
             let spinner = Spinner::new("Connecting to device...");
             client.init().await?;
