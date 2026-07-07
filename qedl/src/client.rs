@@ -1,6 +1,6 @@
 use crate::error::Result;
 use async_trait::async_trait;
-use qedl_core::{DeviceState, PartitionInfo, Session};
+use qedl_core::{DeviceState, ModeOverride, PartitionInfo, Session};
 #[cfg(feature = "sparse")]
 use qedl_job::VerifyJob;
 use qedl_job::{
@@ -297,6 +297,7 @@ pub struct QedlClientBuilder {
     max_retries: u32,
     event_sink: Option<Arc<dyn qedl_core::EventSink>>,
     auto_edl_switch: bool,
+    force_mode: ModeOverride,
     spinner_factory: Option<qedl_job::SpinnerFactory>,
     progress_factory: Option<qedl_job::ProgressFactory>,
     extras: std::collections::HashMap<String, Box<dyn std::any::Any + Send + Sync>>,
@@ -315,6 +316,7 @@ impl QedlClientBuilder {
             max_retries: 3,
             event_sink: None,
             auto_edl_switch: true,
+            force_mode: ModeOverride::Auto,
             spinner_factory: None,
             progress_factory: None,
             extras: std::collections::HashMap::new(),
@@ -375,6 +377,12 @@ impl QedlClientBuilder {
         self
     }
 
+    /// Override device mode detection.
+    pub fn force_mode(mut self, mode: ModeOverride) -> Self {
+        self.force_mode = mode;
+        self
+    }
+
     /// Sets the spinner factory for creating temporary spinners during long operations.
     pub fn spinner_factory(
         mut self,
@@ -411,6 +419,7 @@ impl QedlClientBuilder {
             max_retries: self.max_retries,
             event_sink: self.event_sink,
             auto_edl_switch: self.auto_edl_switch,
+            force_mode: self.force_mode,
             spinner_factory: self.spinner_factory,
             progress_factory: self.progress_factory,
             extras: self.extras,

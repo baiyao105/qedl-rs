@@ -4,7 +4,8 @@ use crate::jobs::{Job, JobResult};
 use async_trait::async_trait;
 use bytes::Bytes;
 use qedl_core::{
-    DeviceState, Event, EventSink, JobEvent, NoopProgress, PartitionInfo, ProgressReporter, Session, emit_event,
+    DeviceState, Event, EventSink, JobEvent, ModeOverride, NoopProgress, PartitionInfo, ProgressReporter, Session,
+    emit_event,
 };
 use qedl_firehose::FirehoseClient;
 #[cfg(feature = "sahara")]
@@ -32,6 +33,7 @@ pub struct ExecutorConfig {
     pub max_retries: u32,
     pub event_sink: Option<Arc<dyn EventSink>>,
     pub auto_edl_switch: bool,
+    pub force_mode: ModeOverride,
     pub spinner_factory: Option<SpinnerFactory>,
     pub progress_factory: Option<ProgressFactory>,
     pub extras: HashMap<String, Box<dyn std::any::Any + Send + Sync>>,
@@ -49,6 +51,7 @@ impl Clone for ExecutorConfig {
             max_retries: self.max_retries,
             event_sink: self.event_sink.clone(),
             auto_edl_switch: self.auto_edl_switch,
+            force_mode: self.force_mode,
             spinner_factory: self.spinner_factory.clone(),
             progress_factory: self.progress_factory.clone(),
             extras: HashMap::new(), // extras cannot be cloned
@@ -68,6 +71,7 @@ impl Default for ExecutorConfig {
             max_retries: 3,
             event_sink: None,
             auto_edl_switch: true,
+            force_mode: ModeOverride::Auto,
             spinner_factory: None,
             progress_factory: None,
             extras: HashMap::new(),
@@ -87,6 +91,7 @@ impl std::fmt::Debug for ExecutorConfig {
             .field("max_retries", &self.max_retries)
             .field("event_sink", &self.event_sink.as_ref().map(|_| "<EventSink>"))
             .field("auto_edl_switch", &self.auto_edl_switch)
+            .field("force_mode", &self.force_mode)
             .field(
                 "spinner_factory",
                 &self.spinner_factory.as_ref().map(|_| "<SpinnerFactory>"),
@@ -116,6 +121,7 @@ pub struct ExecutorConfigBuilder {
     max_retries: u32,
     event_sink: Option<Arc<dyn EventSink>>,
     auto_edl_switch: bool,
+    force_mode: ModeOverride,
     spinner_factory: Option<SpinnerFactory>,
     progress_factory: Option<ProgressFactory>,
     extras: HashMap<String, Box<dyn std::any::Any + Send + Sync>>,
@@ -133,6 +139,7 @@ impl ExecutorConfigBuilder {
             max_retries: 3,
             event_sink: None,
             auto_edl_switch: true,
+            force_mode: ModeOverride::Auto,
             spinner_factory: None,
             progress_factory: None,
             extras: HashMap::new(),
@@ -184,6 +191,14 @@ impl ExecutorConfigBuilder {
         self
     }
 
+    /// Override device mode detection. When set to `Edl` or `Diag`,
+    /// the specified mode is used regardless of USB interface descriptor
+    /// analysis or PID heuristic.
+    pub fn force_mode(mut self, mode: ModeOverride) -> Self {
+        self.force_mode = mode;
+        self
+    }
+
     pub fn spinner_factory(
         mut self,
         factory: impl Fn(&str) -> Box<dyn crate::context::SpinnerHandle + Send> + Send + Sync + 'static,
@@ -216,6 +231,7 @@ impl ExecutorConfigBuilder {
             max_retries: self.max_retries,
             event_sink: self.event_sink,
             auto_edl_switch: self.auto_edl_switch,
+            force_mode: self.force_mode,
             spinner_factory: self.spinner_factory,
             progress_factory: self.progress_factory,
             extras: self.extras,
@@ -275,6 +291,39 @@ impl JobExecutor {
         };
 
         tracing::info!("Device: {} (PID=0x{:04X})", device, device.pid);
+
+        match self.config.force_mode {
+            ModeOverride::Edl => {
+                tracing::info!("Mode overridden to EDL, skipping DIAG detection");
+                let p = device.port.clone();
+                let s = device.serial.clone();
+                let pr = device.product.clone();
+                let d = device.description.clone();
+                self.device = Some(device);
+                self.state = DeviceState::Connected;
+                self.session = Some(Session::new(
+                    qedl_core::DeviceInfo {
+                        port: p,
+                        serial: s,
+                        product: pr,
+                        pid: 0x9008,
+                        vid: 0x05C6,
+                        description: d,
+                        mode: qedl_core::DeviceMode::Edl,
+                    },
+                    qedl_core::DeviceCapabilities::default(),
+                    qedl_core::FirehoseInfo::default(),
+                ));
+                return Ok(());
+            }
+            ModeOverride::Diag => {
+                tracing::info!("Mode overridden to DIAG, sending EDL switch command");
+                DeviceEnumerator::switch_diag_to_edl(&device.port, self.config.timeout.as_secs())?;
+                tracing::info!("DIAG -> EDL switch complete");
+                return Ok(());
+            }
+            ModeOverride::Auto => {}
+        }
 
         if device.is_diag() {
             if !self.config.auto_edl_switch {

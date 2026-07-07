@@ -2,7 +2,7 @@ mod args;
 mod devices;
 mod output;
 
-use args::{Cli, Commands};
+use args::{Cli, Commands, ForceMode};
 use clap::Parser;
 use output::Spinner;
 use output::*;
@@ -68,6 +68,13 @@ async fn main() -> color_eyre::Result<()> {
         .spinner_factory(|msg| Box::new(Spinner::new(msg)))
         .progress_factory(|| Box::new(output::IndicatifProgress::new()));
 
+    if let Some(ref force) = cli.global.force_mode {
+        builder = builder.force_mode(match force {
+            ForceMode::Edl => qedl::ModeOverride::Edl,
+            ForceMode::Diag => qedl::ModeOverride::Diag,
+        });
+    }
+
     if let Some(ref port) = cli.global.port {
         builder = builder.port(port.as_str());
     }
@@ -79,6 +86,14 @@ async fn main() -> color_eyre::Result<()> {
     }
 
     let mut client = builder.build();
+
+    if matches!(cli.global.force_mode, Some(ForceMode::Diag)) {
+        let spinner = Spinner::new("Switching DIAG to EDL...");
+        client.connect()?;
+        drop(spinner);
+        success("Device switched to EDL (9008) mode");
+        return Ok(());
+    }
 
     run(cli.command, &mut client).await
 }

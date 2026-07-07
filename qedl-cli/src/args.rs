@@ -57,6 +57,18 @@ pub struct GlobalArgs {
     /// 禁止自动从 DIAG 模式切换到 EDL 模式 (9008)
     #[arg(long, global = true)]
     pub no_switch_edl: bool,
+
+    /// 强制指定设备模式（覆盖自动检测）
+    #[arg(long, global = true, value_enum)]
+    pub force_mode: Option<ForceMode>,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum ForceMode {
+    /// EDL 模式，跳过 DIAG→EDL 切换
+    Edl,
+    /// DIAG 模式，发送切换命令后退出
+    Diag,
 }
 
 #[derive(Subcommand, Debug)]

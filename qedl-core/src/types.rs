@@ -25,6 +25,17 @@ pub enum DeviceMode {
     Unknown,
 }
 
+/// Override for device mode detection.
+/// When set to `Edl` or `Diag`, the specified mode is used regardless of
+/// USB interface descriptor analysis or PID heuristic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModeOverride {
+    #[default]
+    Auto,
+    Edl,
+    Diag,
+}
+
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
     /// Serial port name (e.g., "COM3", "/dev/ttyUSB0")

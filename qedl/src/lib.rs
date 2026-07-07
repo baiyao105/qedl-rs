@@ -40,8 +40,8 @@ pub use client::{QedlClient, QedlClientBuilder, QedlClientTrait};
 pub use error::{QedlFacadeError, Result as QedlResult};
 
 pub use qedl_core::{
-    DeviceCapabilities, DeviceInfo, DeviceMode, DeviceState, ErrorCode, EventSink, FirehoseInfo, NoopEventSink,
-    NoopProgress, PartitionInfo, ProgressReporter, Session,
+    DeviceCapabilities, DeviceInfo, DeviceMode, DeviceState, ErrorCode, EventSink, FirehoseInfo, ModeOverride,
+    NoopEventSink, NoopProgress, PartitionInfo, ProgressReporter, Session,
 };
 pub use qedl_firehose::FirehoseError;
 pub use qedl_job::{

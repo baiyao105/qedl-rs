@@ -19,5 +19,7 @@ pub use protocol::{
 };
 pub use session::Session;
 pub use state::{DeviceState, StateError};
-pub use types::{DeviceCapabilities, DeviceInfo, DeviceMode, NoopProgress, PartitionInfo, ProgressReporter};
+pub use types::{
+    DeviceCapabilities, DeviceInfo, DeviceMode, ModeOverride, NoopProgress, PartitionInfo, ProgressReporter,
+};
 pub use util::{brief_binary, hex_dump};
