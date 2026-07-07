@@ -21,6 +21,12 @@ pub enum DeviceMode {
     Edl,
     /// DIAG mode (bInterfaceClass=0xFF, SubClass=0xFF, Protocol≠0xFF)
     Diag,
+    /// CDC-ACM modem interface (bInterfaceClass=0x02 or 0x0A)
+    Modem,
+    /// NMEA/GPS interface
+    Nmea,
+    /// Android Debug Bridge (bInterfaceClass=0xFF, SubClass=0x42)
+    Adb,
     /// Could not determine from USB descriptors; fall back to PID heuristic
     Unknown,
 }

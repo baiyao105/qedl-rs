@@ -76,76 +76,63 @@ fn diag_frame(cmd: u8, payload: &[u8]) -> Vec<u8> {
     frame
 }
 
-/// Query the USB interface descriptors for a device to determine its operating mode.
+/// Determine the operating mode for each USB interface of a device.
 ///
-/// Qualcomm USB devices expose different interface class/subclass/protocol combos:
-/// - EDL (firehose): class=0xFF, subclass=0xFF, protocol=0xFF
-/// - DIAG:           class=0xFF, subclass=0xFF, protocol≠0xFF
+/// Reads USB interface descriptors (class/subclass/protocol) plus iInterface
+/// string descriptors to classify each interface:
 ///
-/// When `expected_serial` is provided (`Some(...)`), the function correlates the
-/// serial port to the physical USB device by serial number. This prevents mode
-/// misattribution when multiple identical Qualcomm devices (same VID/PID) are
-/// connected simultaneously.
+/// | Condition | Mode |
+/// |---|---|
+/// | class=0xFF, subclass=0xFF, protocol=0xFF | `Edl` |
+/// | class=0xFF, subclass=0xFF, protocol≠0xFF + iInterface contains "NMEA" or "GPS" | `Nmea` |
+/// | class=0xFF, subclass=0xFF, protocol≠0xFF | `Diag` |
+/// | class=0xFF, subclass=0x42 | `Adb` |
+/// | class=0x02 or 0x0A | `Modem` |
+/// | anything else | `Unknown` |
 ///
-/// Falls back to `DeviceMode::Unknown` if the device cannot be found or queried.
-fn query_device_mode(vid: u16, pid: u16, expected_serial: Option<&str>) -> DeviceMode {
-    let devices = match rusb::DeviceList::new() {
-        Ok(list) => list,
-        Err(e) => {
-            tracing::trace!("rusb: failed to enumerate devices: {}", e);
-            return DeviceMode::Unknown;
-        }
+/// Also returns each interface's iInterface string descriptor for
+/// matching against serialport's product string.
+///
+/// When `expected_serial` is provided, correlates the serial port
+/// to the exact physical USB device by serial number.
+fn query_per_interface_modes(
+    vid: u16,
+    pid: u16,
+    expected_serial: Option<&str>,
+) -> Vec<(u8, DeviceMode, Option<String>)> {
+    let Ok(devices) = rusb::DeviceList::new() else {
+        return Vec::new();
     };
 
+    // Only known EDL PIDs can report Edl. protocol=0xFF on DIAG/Modem
+    // devices is treated as Diag.
+    const EDL_PIDS: &[u16] = &[0x9008, 0x900E, 0x900D];
+    let is_edl_pid = EDL_PIDS.contains(&pid);
+
+    let mut result: Vec<(u8, DeviceMode, Option<String>)> = Vec::new();
+
     'device_loop: for device in devices.iter() {
-        let desc = match device.device_descriptor() {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
+        let Ok(desc) = device.device_descriptor() else { continue };
         if desc.vendor_id() != vid || desc.product_id() != pid {
             continue;
         }
 
-        // When a serial number is available from the serial port driver, use it
-        // to correlate to the exact physical USB device. This prevents returning
-        // the mode from a different device when multiple identical Qualcomm
-        // devices are connected (same VID/PID but different serials).
+        // Serial number correlation
         if let Some(expected) = expected_serial {
             let timeout = Duration::from_millis(500);
-            match device.open() {
-                Ok(handle) => {
-                    let langs = handle.read_languages(timeout).unwrap_or_default();
-                    if let Some(&lang) = langs.first() {
-                        match handle.read_serial_number_string(lang, &desc, timeout) {
-                            Ok(actual) if actual != expected => {
-                                // Definitively a different device — skip.
-                                continue 'device_loop;
-                            }
-                            _ => {
-                                // Serial matched or read failed (e.g. permission).
-                                // Proceed to mode detection.
-                            }
-                        }
-                    }
-                }
-                Err(_) => {
-                    // Cannot open device (driver contention). Fall through to
-                    // VID+PID matching as best-effort.
+            if let Ok(handle) = device.open() {
+                let langs = handle.read_languages(timeout).unwrap_or_default();
+                if let Some(&lang) = langs.first()
+                    && let Ok(actual) = handle.read_serial_number_string(lang, &desc, timeout)
+                    && actual != expected
+                {
+                    continue 'device_loop;
                 }
             }
         }
 
-        let config = match device.active_config_descriptor() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::trace!(
-                    "rusb: failed to read config descriptor for {:04X}:{:04X}: {}",
-                    vid,
-                    pid,
-                    e
-                );
-                return DeviceMode::Unknown;
-            }
+        let Ok(config) = device.active_config_descriptor() else {
+            continue;
         };
 
         for iface in config.interfaces() {
@@ -153,32 +140,56 @@ fn query_device_mode(vid: u16, pid: u16, expected_serial: Option<&str>) -> Devic
                 let class = iface_desc.class_code();
                 let subclass = iface_desc.sub_class_code();
                 let protocol = iface_desc.protocol_code();
+                let iface_num = iface_desc.interface_number();
+
+                // Try to read iInterface string descriptor first (needed for NMEA detection)
+                let iface_string = device.open().ok().and_then(|handle| {
+                    let idx = iface_desc.description_string_index()?;
+                    handle.read_string_descriptor_ascii(idx).ok()
+                });
+
+                let mode = match (class, subclass, protocol) {
+                    // EDL only when PID is a known EDL PID
+                    (0xFF, 0xFF, 0xFF) if is_edl_pid => DeviceMode::Edl,
+                    (0xFF, 0x42, _) => DeviceMode::Adb,
+                    (0x02, _, _) | (0x0A, _, _) => DeviceMode::Modem,
+                    (0xFF, 0xFF, _) => {
+                        // NMEA interfaces use vendor-specific class (0xFF) like DIAG,
+                        // but their iInterface string contains "NMEA" or "GPS".
+                        if let Some(ref s) = iface_string {
+                            let lower = s.to_lowercase();
+                            if lower.contains("nmea") || lower.contains("gps") {
+                                DeviceMode::Nmea
+                            } else {
+                                DeviceMode::Diag
+                            }
+                        } else {
+                            DeviceMode::Diag
+                        }
+                    }
+                    _ => DeviceMode::Unknown,
+                };
 
                 tracing::trace!(
-                    "rusb: {:04X}:{:04X} interface {} class={:02X} subclass={:02X} protocol={:02X}",
+                    "rusb: {:04X}:{:04X} iface {} class={:02X} subclass={:02X} protocol={:02X} iface_str={:?} → {:?}",
                     vid,
                     pid,
-                    iface_desc.interface_number(),
+                    iface_num,
                     class,
                     subclass,
-                    protocol
+                    protocol,
+                    iface_string,
+                    mode
                 );
 
-                if class == 0xFF && subclass == 0xFF {
-                    return if protocol == 0xFF {
-                        DeviceMode::Edl
-                    } else {
-                        DeviceMode::Diag
-                    };
-                }
+                result.push((iface_num, mode, iface_string));
             }
         }
 
-        tracing::trace!("rusb: {:04X}:{:04X} has no vendor-specific (0xFF) interface", vid, pid);
-        return DeviceMode::Unknown;
+        return result;
     }
 
-    DeviceMode::Unknown
+    result
 }
 
 /// Trait abstracting device discovery.
@@ -215,8 +226,12 @@ pub trait DeviceEnumeratorTrait {
 pub struct DeviceEnumerator;
 
 impl DeviceEnumerator {
+    #[allow(clippy::type_complexity)]
     pub fn list() -> Result<Vec<DeviceInfo>> {
         let ports = serialport::available_ports().map_err(serialport_error_to_io)?;
+
+        let mut mode_cache: HashMap<(u16, u16, Option<String>), Vec<(u8, DeviceMode, Option<String>)>> = HashMap::new();
+        let mut port_index: HashMap<(u16, u16, Option<String>), usize> = HashMap::new();
 
         let mut devices = Vec::new();
         for port in &ports {
@@ -229,31 +244,62 @@ impl DeviceEnumerator {
                 continue;
             }
 
-            let serial_for_query = match &port.port_type {
-                serialport::SerialPortType::UsbPort(info) => info.serial_number.as_deref(),
-                _ => None,
-            };
-            let mode = query_device_mode(vid, pid, serial_for_query);
-
-            let description = match &port.port_type {
-                serialport::SerialPortType::UsbPort(info) => Some(info.product.clone().unwrap_or_else(|| match mode {
-                    DeviceMode::Edl => "Qualcomm 9008 (EDL)".to_string(),
-                    DeviceMode::Diag => "Qualcomm DIAG".to_string(),
-                    DeviceMode::Unknown => "Qualcomm".to_string(),
-                })),
-                _ => None,
-            };
             let serial = match &port.port_type {
                 serialport::SerialPortType::UsbPort(info) => info.serial_number.clone(),
                 _ => None,
             };
+            let cache_key = (vid, pid, serial.clone());
+
+            let iface_modes = mode_cache
+                .entry(cache_key.clone())
+                .or_insert_with(|| query_per_interface_modes(vid, pid, serial.as_deref()));
+            let product = match &port.port_type {
+                serialport::SerialPortType::UsbPort(info) => info.product.clone(),
+                _ => None,
+            };
+
+            // Match port to USB interface by iInterface string. Try to find an
+            // interface whose string matches the serialport product name. This
+            // is more reliable than sequential assignment when COM port order
+            // does not match USB interface number order.
+            let idx = port_index.entry(cache_key).or_insert(0);
+            let mode = if let Some(ref prod) = product {
+                let cleaned = prod.trim().trim_end_matches(')');
+                let matched = iface_modes.iter().find(|(_, _, s)| {
+                    s.as_deref()
+                        .is_some_and(|iface_str| iface_str == cleaned || prod.starts_with(iface_str))
+                });
+                if let Some(&(_, m, _)) = matched {
+                    m
+                } else if *idx < iface_modes.len() {
+                    let m = iface_modes[*idx].1;
+                    *idx += 1;
+                    m
+                } else {
+                    DeviceMode::Unknown
+                }
+            } else if *idx < iface_modes.len() {
+                let m = iface_modes[*idx].1;
+                *idx += 1;
+                m
+            } else {
+                DeviceMode::Unknown
+            };
+            let description = product.clone().unwrap_or_else(|| match mode {
+                DeviceMode::Edl => "Qualcomm 9008 (EDL)".to_string(),
+                DeviceMode::Diag => "Qualcomm DIAG".to_string(),
+                DeviceMode::Modem => "Qualcomm Modem".to_string(),
+                DeviceMode::Nmea => "Qualcomm NMEA".to_string(),
+                DeviceMode::Adb => "Qualcomm ADB".to_string(),
+                DeviceMode::Unknown => "Qualcomm".to_string(),
+            });
             let info = DeviceInfo {
                 port: port.port_name.clone(),
                 serial,
-                product: description.clone(),
+                product: Some(description.clone()),
                 vid,
                 pid,
-                description,
+                description: Some(description),
                 mode,
             };
             devices.push(info);
@@ -261,12 +307,16 @@ impl DeviceEnumerator {
         Ok(devices)
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn list_all() -> Result<Vec<DeviceInfo>> {
         let ports = serialport::available_ports().map_err(serialport_error_to_io)?;
 
+        let mut mode_cache: HashMap<(u16, u16, Option<String>), Vec<(u8, DeviceMode, Option<String>)>> = HashMap::new();
+        let mut port_index: HashMap<(u16, u16, Option<String>), usize> = HashMap::new();
+
         let mut devices = Vec::new();
         for port in &ports {
-            let (vid, pid, serial, description) = match &port.port_type {
+            let (vid, pid, serial, product) = match &port.port_type {
                 serialport::SerialPortType::UsbPort(info) => (
                     Some(info.vid),
                     Some(info.pid),
@@ -277,18 +327,34 @@ impl DeviceEnumerator {
             };
             let v = vid.unwrap_or(0);
             let p = pid.unwrap_or(0);
+
             let mode = if v == QUALCOMM_VID {
-                query_device_mode(v, p, serial.as_deref())
+                let cache_key = (v, p, serial.clone());
+                let iface_modes = mode_cache
+                    .entry(cache_key.clone())
+                    .or_insert_with(|| query_per_interface_modes(v, p, serial.as_deref()));
+                let idx = port_index.entry(cache_key).or_insert(0);
+                if iface_modes.is_empty() {
+                    DeviceMode::Unknown
+                } else if *idx < iface_modes.len() {
+                    let m = iface_modes[*idx].1;
+                    *idx += 1;
+                    m
+                } else {
+                    *idx += 1;
+                    DeviceMode::Unknown
+                }
             } else {
                 DeviceMode::Unknown
             };
+
             devices.push(DeviceInfo {
                 port: port.port_name.clone(),
                 serial,
-                product: description.clone(),
+                product: product.clone(),
                 vid: v,
                 pid: p,
-                description,
+                description: product.clone(),
                 mode,
             });
         }

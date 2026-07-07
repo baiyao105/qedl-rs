@@ -27,19 +27,23 @@ impl StateError {
 }
 
 const VALID_TRANSITIONS: &[(DeviceState, DeviceState)] = &[
+    // Normal flow
     (DeviceState::Disconnected, DeviceState::Connected),
     (DeviceState::Connected, DeviceState::Ready),
-    (DeviceState::Connected, DeviceState::Error),
     (DeviceState::Ready, DeviceState::Busy),
-    (DeviceState::Ready, DeviceState::Disconnected),
-    (DeviceState::Ready, DeviceState::Resetting),
     (DeviceState::Busy, DeviceState::Ready),
-    (DeviceState::Busy, DeviceState::Error),
-    (DeviceState::Busy, DeviceState::Disconnected),
-    (DeviceState::Resetting, DeviceState::Disconnected),
+    (DeviceState::Ready, DeviceState::Resetting),
     (DeviceState::Resetting, DeviceState::Connected),
+    (DeviceState::Ready, DeviceState::Disconnected),
+    // Error recovery
+    (DeviceState::Connected, DeviceState::Error),
+    (DeviceState::Busy, DeviceState::Error),
     (DeviceState::Error, DeviceState::Disconnected),
     (DeviceState::Error, DeviceState::Resetting),
+    (DeviceState::Error, DeviceState::Connected),
+    // Mid-operation reconnect
+    (DeviceState::Busy, DeviceState::Connected),
+    (DeviceState::Ready, DeviceState::Connected),
 ];
 
 impl DeviceState {

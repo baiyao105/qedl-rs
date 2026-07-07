@@ -100,12 +100,6 @@ async fn main() -> color_eyre::Result<()> {
 
 async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Result<()> {
     match command {
-        Commands::List => {
-            let devices = DeviceEnumerator::list()?;
-            let device_strs: Vec<String> = devices.iter().map(|d| d.to_string()).collect();
-            device_list(&device_strs);
-            Ok(())
-        }
         Commands::Devices { .. } => unreachable!(),
         Commands::Info => {
             let spinner = Spinner::new("Connecting to device...");

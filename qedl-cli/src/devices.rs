@@ -86,7 +86,10 @@ fn group_devices(devices: Vec<DeviceInfo>) -> Vec<DeviceGroup> {
                     match m {
                         DeviceMode::Edl => 0,
                         DeviceMode::Diag => 1,
-                        DeviceMode::Unknown => 2,
+                        DeviceMode::Modem => 2,
+                        DeviceMode::Nmea => 3,
+                        DeviceMode::Adb => 4,
+                        DeviceMode::Unknown => 5,
                     }
                 }
                 mode_priority(&a.mode).cmp(&mode_priority(&b.mode))
@@ -102,6 +105,9 @@ fn group_devices(devices: Vec<DeviceInfo>) -> Vec<DeviceGroup> {
                     let desc = d.description.unwrap_or_else(|| match d.mode {
                         DeviceMode::Edl => "Qualcomm 9008 (EDL)".to_string(),
                         DeviceMode::Diag => "Qualcomm DIAG".to_string(),
+                        DeviceMode::Modem => "Qualcomm Modem".to_string(),
+                        DeviceMode::Nmea => "Qualcomm NMEA".to_string(),
+                        DeviceMode::Adb => "Qualcomm ADB".to_string(),
                         DeviceMode::Unknown => "Qualcomm Device".to_string(),
                     });
                     (d.port, d.mode, desc)
@@ -130,6 +136,9 @@ fn mode_str(mode: DeviceMode) -> &'static str {
     match mode {
         DeviceMode::Edl => "EDL",
         DeviceMode::Diag => "DIAG",
+        DeviceMode::Modem => "MODEM",
+        DeviceMode::Nmea => "NMEA",
+        DeviceMode::Adb => "ADB",
         DeviceMode::Unknown => "UNKNOWN",
     }
 }
@@ -190,16 +199,11 @@ fn print_group(group: &DeviceGroup) {
     for (i, (port, mode, desc)) in group.ports.iter().enumerate() {
         let is_last = i == group.ports.len() - 1;
         let branch = if is_last { "└──" } else { "├──" };
-        let mode_label = match mode {
-            DeviceMode::Edl => "EDL    ",
-            DeviceMode::Diag => "DIAG   ",
-            DeviceMode::Unknown => "UNKNOWN ",
-        };
         println!(
-            "     {} {} {}  {}  {:04X}:{:04X}",
+            "     {} {}  {:<6}  {}  {:04X}:{:04X}",
             branch.dimmed(),
             port.white().bold(),
-            mode_label.green(),
+            mode_str(*mode).green(),
             clean_desc(desc),
             group.vid,
             group.pid
@@ -305,7 +309,7 @@ fn run_watch(interval_secs: u64) -> color_eyre::Result<()> {
                     };
                     let clean = clean_desc(desc);
                     eprintln!(
-                        "{} {}  ({})  {}",
+                        "{} {}  {:<6}  {}",
                         prefix,
                         port.white().bold(),
                         mode_str(*mode).cyan(),

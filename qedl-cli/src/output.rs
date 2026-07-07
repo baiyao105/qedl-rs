@@ -80,19 +80,6 @@ pub fn kv(key: &str, value: &str) {
     println!("    {:<14} {}", key.white().bold(), value);
 }
 
-/// Format and print device list
-pub fn device_list(devices: &[String]) {
-    if devices.is_empty() {
-        println!("  {}", "No 9008/DIAG devices found.".dimmed());
-        return;
-    }
-    println!("  {}", format!("Found {} device(s):", devices.len()).bold());
-    println!();
-    for (i, dev) in devices.iter().enumerate() {
-        println!("    {} {}", format!("{}.", i + 1).dimmed(), dev);
-    }
-}
-
 /// Print XML response
 pub fn xml_response(success: bool, message: &str) {
     if success {

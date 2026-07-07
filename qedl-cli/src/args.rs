@@ -73,9 +73,6 @@ pub enum ForceMode {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// 列出所有连接的 9008 设备
-    List,
-
     /// 列出设备（按 EDL/DIAG 分组）
     Devices {
         /// 实时监控设备插拔（可选刷新间隔秒数，默认 1s）
