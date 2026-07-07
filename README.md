@@ -1,4 +1,6 @@
 # qedl-rs
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fbaiyao105%2Fqedl-rs.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fbaiyao105%2Fqedl-rs?ref=badge_shield)
+
 
 **Qualcomm Emergency Download (EDL) SDK and CLI — written in Rust**
 
@@ -71,3 +73,6 @@ qedl-cli        → CLI binary
 ## License
 
 MIT
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fbaiyao105%2Fqedl-rs.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fbaiyao105%2Fqedl-rs?ref=badge_large)
