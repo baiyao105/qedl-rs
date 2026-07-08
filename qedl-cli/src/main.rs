@@ -158,6 +158,32 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             }
             Ok(())
         }
+        Commands::GenXml { output } => {
+            let spinner = Spinner::new("Connecting to device...");
+            client.init().await?;
+            drop(spinner);
+
+            let sector_size = client.session().map(|s| s.sector_size()).unwrap_or(4096);
+            let programs: Vec<String> = client.partitions().iter().map(|p| {
+                let n = p.name.trim().trim_end_matches('\0');
+                let sectors = p.last_lba - p.first_lba + 1;
+                format!(
+                    r#"  <program SECTOR_SIZE_IN_BYTES="{}" file_sector_offset="0" filename="{n}.img" label="{n}" num_partition_sectors="{sectors}" physical_partition_number="{}" size_in_KB="{}" sparse="false" start_byte="0" start_sector="{}" />"#,
+                    sector_size, p.physical_partition, (sectors * sector_size as u64) / 1024, p.first_lba
+                )
+            }).collect();
+
+            let xml = std::iter::once(r#"<?xml version="1.0" encoding="UTF-8"?>"#)
+                .chain(std::iter::once("<data>"))
+                .chain(programs.iter().map(|s| s.as_str()))
+                .chain(std::iter::once("</data>"))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            std::fs::write(&output, xml)?;
+            success(&format!("Generated {}", output.display()));
+            Ok(())
+        }
         Commands::Dump {
             partition,
             file,

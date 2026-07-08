@@ -165,6 +165,13 @@ pub enum Commands {
         #[arg(long, short = 'f')]
         file: Option<PathBuf>,
     },
+
+    /// 根据 GPT 生成 rawprogram.xml
+    #[command(name = "genxml")]
+    GenXml {
+        /// 输出文件路径 (例如 rawprogram.xml)
+        output: PathBuf,
+    },
 }
 
 const ABOUT: &str = r#"qedl - A Qualcomm 9008 EDL Tool
