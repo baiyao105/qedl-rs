@@ -162,24 +162,8 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             let spinner = Spinner::new("Connecting to device...");
             client.init().await?;
             drop(spinner);
-
             let sector_size = client.session().map(|s| s.sector_size()).unwrap_or(4096);
-            let programs: Vec<String> = client.partitions().iter().map(|p| {
-                let n = p.name.trim().trim_end_matches('\0');
-                let sectors = p.last_lba - p.first_lba + 1;
-                format!(
-                    r#"  <program SECTOR_SIZE_IN_BYTES="{}" file_sector_offset="0" filename="{n}.img" label="{n}" num_partition_sectors="{sectors}" physical_partition_number="{}" size_in_KB="{}" sparse="false" start_byte="0" start_sector="{}" />"#,
-                    sector_size, p.physical_partition, (sectors * sector_size as u64) / 1024, p.first_lba
-                )
-            }).collect();
-
-            let xml = std::iter::once(r#"<?xml version="1.0" encoding="UTF-8"?>"#)
-                .chain(std::iter::once("<data>"))
-                .chain(programs.iter().map(|s| s.as_str()))
-                .chain(std::iter::once("</data>"))
-                .collect::<Vec<_>>()
-                .join("\n");
-
+            let xml = generate_rawprogram_xml(client.partitions(), sector_size);
             std::fs::write(&output, xml)?;
             success(&format!("Generated {}", output.display()));
             Ok(())
@@ -188,8 +172,59 @@ async fn run(command: Commands, client: &mut qedl::QedlClient) -> color_eyre::Re
             partition,
             file,
             resume,
+        } => {
+            let spinner = Spinner::new("Connecting to device...");
+            client.init().await?;
+            drop(spinner);
+            let result = if resume {
+                client.dump_resume(&partition, &file).await?
+            } else {
+                client.dump(&partition, &file).await?
+            };
+            success(&result.message);
+            Ok(())
         }
-        | Commands::Read {
+        Commands::DumpPartitions {
+            output,
+            genxml,
+            excludes,
+        } => {
+            let spinner = Spinner::new("Connecting to device...");
+            client.init().await?;
+            drop(spinner);
+            std::fs::create_dir_all(&output)?;
+            let excluded: Vec<&str> = excludes.iter().map(|s| s.as_str()).collect();
+            let partitions: Vec<_> = client
+                .partitions()
+                .iter()
+                .filter(|p| {
+                    let pname = p.name.trim().trim_end_matches('\0');
+                    !excluded.iter().any(|e| e.eq_ignore_ascii_case(pname))
+                })
+                .cloned()
+                .collect();
+            let total = partitions.len();
+            let mut ok = 0usize;
+            for (i, p) in partitions.iter().enumerate() {
+                let pname = p.name.trim().trim_end_matches('\0');
+                let path = output.join(format!("{pname}.img"));
+                println!("[{}/{}] {pname} -> {}", i + 1, total, path.display());
+                match client.dump_to(pname, &path, true, false).await {
+                    Ok(_) => ok += 1,
+                    Err(e) => eprintln!("  Failed: {e}"),
+                }
+            }
+            if genxml {
+                let sector_size = client.session().map(|s| s.sector_size()).unwrap_or(4096);
+                let xml = generate_rawprogram_xml(&partitions, sector_size);
+                let xml_path = output.join("rawprogram.xml");
+                std::fs::write(&xml_path, xml)?;
+                println!("Generated {}", xml_path.display());
+            }
+            println!("Done: {ok}/{total} partitions dumped to {}", output.display());
+            Ok(())
+        }
+        Commands::Read {
             partition,
             file,
             resume,
@@ -299,6 +334,26 @@ fn resolve_xml_input(xml: Option<String>, file: Option<std::path::PathBuf>) -> c
             let content = std::fs::read_to_string(&path)?;
             Ok(content)
         }
-        (None, None) => Err(color_eyre::eyre::eyre!("Specify XML either via --file <path> or xml <xml-text>")),
+        (None, None) => Err(color_eyre::eyre::eyre!(
+            "Specify XML either via --file <path> or xml <xml-text>"
+        )),
     }
+}
+
+fn generate_rawprogram_xml(partitions: &[qedl::PartitionInfo], sector_size: u32) -> String {
+    let programs: Vec<String> = partitions.iter().map(|p| {
+        let n = p.name.trim().trim_end_matches('\0');
+        let sectors = p.last_lba - p.first_lba + 1;
+        format!(
+            r#"  <program SECTOR_SIZE_IN_BYTES="{}" file_sector_offset="0" filename="{n}.img" label="{n}" num_partition_sectors="{sectors}" physical_partition_number="{}" size_in_KB="{}" sparse="false" start_byte="0" start_sector="{}" />"#,
+            sector_size, p.physical_partition, (sectors * sector_size as u64) / 1024, p.first_lba
+        )
+    }).collect();
+
+    std::iter::once(r#"<?xml version="1.0" encoding="UTF-8"?>"#.to_string())
+        .chain(std::iter::once("<data>".to_string()))
+        .chain(programs)
+        .chain(std::iter::once("</data>".to_string()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }

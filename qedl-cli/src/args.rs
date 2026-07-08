@@ -92,9 +92,11 @@ pub enum Commands {
 
     /// 导出分区
     Dump {
+        /// 分区名称
         partition: String,
+        /// 输出文件
         file: PathBuf,
-        /// 如果文件已存在，尝试从断点处继续下载
+        /// 断点续传 (如果文件已存在则继续写入)
         #[arg(long, short)]
         resume: bool,
     },
@@ -102,11 +104,26 @@ pub enum Commands {
     /// Dump 的别名
     #[command(name = "read")]
     Read {
+        /// 分区名称
         partition: String,
+        /// 输出文件
         file: PathBuf,
-        /// 如果文件已存在，尝试从断点处继续下载
+        /// 断点续传
         #[arg(long, short)]
         resume: bool,
+    },
+
+    /// 导出所有分区
+    DumpPartitions {
+        /// 输出目录 (默认: dumps)
+        #[arg(long, short = 'o', default_value = "dumps")]
+        output: PathBuf,
+        /// 在输出目录生成 rawprogram.xml
+        #[arg(long)]
+        genxml: bool,
+        /// 排除指定分区 (如 --exclude userdata --exclude cache)
+        #[arg(long = "exclude", action = clap::ArgAction::Append)]
+        excludes: Vec<String>,
     },
 
     /// 刷写分区
