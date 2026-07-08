@@ -159,9 +159,10 @@ pub enum Commands {
 
     /// 发送自定义 XML
     Xml {
-        #[arg(long, short = 'x')]
+        /// XML 字符串
         xml: Option<String>,
 
+        /// 从文件读取 XML
         #[arg(long, short = 'f')]
         file: Option<PathBuf>,
     },

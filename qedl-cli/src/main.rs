@@ -299,6 +299,6 @@ fn resolve_xml_input(xml: Option<String>, file: Option<std::path::PathBuf>) -> c
             let content = std::fs::read_to_string(&path)?;
             Ok(content)
         }
-        (None, None) => Err(color_eyre::eyre::eyre!("Specify XML with --xml or --file")),
+        (None, None) => Err(color_eyre::eyre::eyre!("Specify XML either via --file <path> or xml <xml-text>")),
     }
 }
