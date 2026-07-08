@@ -1,3 +1,9 @@
+//! Transport layer abstraction for Qualcomm EDL devices.
+//!
+//! This crate provides the [`Transport`] trait for USB/serial communication,
+//! [`DeviceEnumerator`] for discovering connected devices, and [`MockTransport`]
+//! for testing.
+
 pub mod device;
 pub mod error;
 pub mod mock;

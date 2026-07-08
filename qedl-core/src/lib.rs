@@ -1,4 +1,7 @@
 //! Core types and error definitions for QEDL.
+//!
+//! Defines the foundational types, error codes, protocol constants, and event
+//! system shared across all crates in the qedl-rs workspace.
 
 pub mod error;
 pub mod event;

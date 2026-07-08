@@ -1,4 +1,8 @@
 //! Rawprogram/patch XML parsing and sparse image expansion.
+//!
+//! Parses `rawprogram*.xml` and `patch*.xml` files into executable task lists,
+//! handles sparse image expansion (Android `.s` format), and provides checksum
+//! utilities.
 
 pub mod checksum;
 pub mod error;

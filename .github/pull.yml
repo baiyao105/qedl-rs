@@ -1,0 +1,9 @@
+# Pull App
+version: "1"
+rules:
+  - base: master
+    upstream: qedl-rs:master # 上游仓库的主分支
+    mergeMethod: rebase
+    mergeUnstable: false # 可选: 当mergeable_state不是clean时是否合并
+#  - base: develop
+#    upstream: main

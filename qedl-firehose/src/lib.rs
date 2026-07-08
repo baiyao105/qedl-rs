@@ -1,4 +1,8 @@
 //! Firehose XML command engine.
+//!
+//! Implements the Firehose protocol for reading, writing, and erasing sectors
+//! on Qualcomm devices in EDL mode. Provides [`FirehoseClient`] for real
+//! communication and [`FirehoseProtocol`] trait for testing.
 
 pub mod client;
 pub mod command;

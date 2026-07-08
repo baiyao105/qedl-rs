@@ -1,4 +1,7 @@
 //! Sahara handshake protocol.
+//!
+//! Handles the initial USB handshake when a Qualcomm device enters EDL mode,
+//! including Hello/HelloResponse exchange and optional Firehose loader upload.
 
 pub mod error;
 pub mod protocol;

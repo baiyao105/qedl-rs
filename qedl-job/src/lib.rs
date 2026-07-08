@@ -1,4 +1,8 @@
 //! Job orchestration for flash, dump, erase, and info operations.
+//!
+//! Provides [`JobExecutor`] for running high-level operations and [`Job`]
+//! trait for implementing custom operations. Includes progress reporting
+//! via [`JobContext`] trait.
 
 pub mod context;
 pub mod error;
